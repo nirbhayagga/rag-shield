@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+models/
+*.log
+*.pem
+*.sqlite3
+
+# Private evaluation corpus and harness (not distributed)
+data/vandelay/
+vendor/eval_harness.py
+vendor/results/
+
+# Experiment outputs quote corpus text (probes, benign edits), so they stay local. Regenerate with experiments/*.py.
+results/

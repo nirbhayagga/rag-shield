@@ -1,0 +1,14 @@
+# Python 3.12. On a CUDA machine install torch first from the matching index, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# On a CPU-only machine:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.5
+sentence-transformers>=3
+transformers>=4.45
+numpy>=2
+scikit-learn>=1.5
+cryptography>=43
+pyyaml>=6
+pandas>=2
+requests>=2.32
+rank-bm25>=0.2
