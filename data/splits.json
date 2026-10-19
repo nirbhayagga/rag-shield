@@ -1,0 +1,43 @@
+{
+  "seed": 13,
+  "test_docs": [
+    "asset-inventory-v1",
+    "chg-2026-0891",
+    "cve-2026-3171-writeup",
+    "edr-alert-export-20260224-reissue",
+    "hris-error-log-20260307",
+    "inc-2026-042",
+    "inc-2026-047",
+    "malware-analysis-lorenzo-loader",
+    "pir-campaign-march",
+    "soc-shift-notes-20260305"
+  ],
+  "train_docs": [
+    "access-review-q1",
+    "advisory-aperture-sa-2026-014",
+    "advisory-kestrel-sa-2026-007",
+    "asset-inventory-v2",
+    "auth-log-20260314",
+    "change-log-march",
+    "chg-2026-0884",
+    "cve-2026-3117-writeup",
+    "edr-alert-export-20260224",
+    "hr-offboarding-notice",
+    "hr-onboarding-dwhitfield",
+    "iam-group-membership",
+    "ids-alert-export-20260301",
+    "inc-2026-041",
+    "inc-2026-043",
+    "inc-2026-044",
+    "inc-2026-045",
+    "inc-2026-046",
+    "inc-2026-048",
+    "network-segments",
+    "pir-inc-2026-041",
+    "proxy-log-20260321",
+    "soc-daily-digest-20260301",
+    "ti-infrastructure",
+    "ti-silver-tamarin"
+  ],
+  "note": "Document-level split. Anything trained on train_docs must be evaluated on test_docs only."
+}
