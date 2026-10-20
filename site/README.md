@@ -21,6 +21,9 @@ npm run dev                              # http://localhost:8788
 npm test                                 # validation tests
 ```
 
+`public/index.html` carries the production Turnstile site key, which doesn't render on `localhost`. For local testing,
+temporarily set `data-sitekey` to Cloudflare's test key `1x00000000000000000000AA` (it pairs with the test secret in `.dev.vars`).
+
 ## Deploy (one time)
 
 ```bash
@@ -30,8 +33,8 @@ npx wrangler d1 create ragshield-site    # copy database_id into wrangler.toml
 npm run db:remote
 ```
 
-1. **Turnstile:** Cloudflare dashboard › Turnstile › Add widget for `ragshield.dev` (Managed mode). Put the **site key** in
-   `public/index.html` (`data-sitekey`), replacing the test key. With the test key left in, production submissions fail
+1. **Turnstile:** Cloudflare dashboard › Turnstile › Add widget for `ragshield.dev` and `ragshield-site.pages.dev` (Managed
+   mode). Put the **site key** in `public/index.html` (`data-sitekey`). With the test key in production, submissions fail
    verification. That's noisy, but it fails closed.
 2. **Secrets:**
    ```bash

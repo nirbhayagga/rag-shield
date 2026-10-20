@@ -5,7 +5,7 @@ compatibility_date = "2026-10-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "ragshield-site"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"   # from: npx wrangler d1 create ragshield-site
+database_id = "b140ea5b-64bd-4eef-9cac-8ac619738a0f"
 
 # Secrets are NOT set here. Production: npx wrangler pages secret put <NAME>
 #   TURNSTILE_SECRET, IP_SALT, and optionally DISCORD_WEBHOOK_URL, NTFY_URL, NTFY_TOKEN,
