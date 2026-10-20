@@ -22,9 +22,9 @@ document.querySelectorAll('[data-copy]').forEach((button) => button.addEventList
 }));
 
 const form = document.getElementById('apply');
-const msg = form.querySelector('.msg');
+const msg = form?.querySelector('.msg');
 
-form.addEventListener('submit', async (event) => {
+form?.addEventListener('submit', async (event) => {
   event.preventDefault();
   msg.textContent = '';
   msg.className = 'msg';
