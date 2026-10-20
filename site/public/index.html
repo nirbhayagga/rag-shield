@@ -8,87 +8,116 @@
 <meta property="og:title" content="RAG Shield">
 <meta property="og:description" content="Know where every retrieved chunk came from, and whether to trust it.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/ibm-plex-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/styles.css">
 <script src="/app.js" defer></script>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
-<!-- Configuration: data-cal = your Cal.com booking link (hidden until set), data-github = public repo link (hidden until set). -->
+<!-- Configuration: data-cal = your booking link (hidden until set), data-github = public repo link (hidden until set). -->
 <body data-cal="https://cal.com/REPLACE_ME/15min" data-github="">
-<header class="wrap nav">
-  <a class="logo" href="/"><img src="/favicon.svg" alt="" width="26" height="26">RAG Shield</a>
-  <nav>
-    <a href="#how">How it works</a><a href="#results">Results</a><a href="#pricing">Pricing</a>
-    <a class="btn small" href="#partner">Become a design partner</a>
-  </nav>
+<header class="topbar">
+  <div class="wrap nav">
+    <a class="logo" href="/"><img src="/favicon.svg" alt="" width="24" height="24">RAG Shield</a>
+    <nav>
+      <a href="#how">How it works</a><a href="#results">Results</a><a href="#pricing">Pricing</a>
+      <a class="btn ghost small" href="#partner">Design partners</a>
+    </nav>
+  </div>
 </header>
 
 <main>
 <section class="wrap hero">
-  <p class="eyebrow">Provenance and poisoning detection for retrieval-augmented AI</p>
-  <h1>Know where every retrieved chunk came from, and whether to trust it.</h1>
-  <p class="lede">Your assistant trusts whatever sits in its index, and anyone who can edit a wiki page or ticket can put text there.
-    RAG Shield signs every chunk at ingestion, isolates what each edit to a trusted page adds, and checks every chunk at
-    retrieval, before your model sees it.</p>
-  <div class="cta">
-    <a class="btn" href="#partner">Become a design partner</a>
-    <button class="code-btn" type="button" data-copy="pip install rag-shield" aria-label="Copy install command">
-      <code>pip install rag-shield</code><span class="copy-label">Copy</span>
-    </button>
+  <div class="hero-copy">
+    <p class="kicker">Provenance and poisoning detection for retrieval-augmented AI</p>
+    <h1>Know where every retrieved chunk came from, and whether to trust it.</h1>
+    <p class="lede">Your assistant trusts whatever sits in its index, and anyone who can edit a wiki page or ticket can put text there.
+      RAG Shield signs every chunk at ingestion, isolates what each edit to a trusted page adds, and checks every chunk at
+      retrieval, before your model sees it.</p>
+    <div class="cta">
+      <a class="btn" href="#partner">Become a design partner</a>
+      <button class="code-btn" type="button" data-copy="pip install rag-shield" aria-label="Copy install command">
+        <code><span class="prompt">$</span> pip install rag-shield</code><span class="copy-label">Copy</span>
+      </button>
+    </div>
+    <p class="fine">Open-source SDK · first release November 2026 · runs in your environment</p>
   </div>
-  <p class="small muted">Open-source SDK · first release November 2026 · runs in your environment</p>
+  <figure class="log" aria-label="Example of one filtered retrieval">
+    <div class="log-bar"><span>retrieval trace</span><span>example</span></div>
+    <pre><code><span class="dim">&gt;&gt;&gt;</span> shield.retrieve("rotate the VPN signing key")
+
+<span class="pass">PASS</span>  wiki/vpn-keys §3    <span class="dim">verified · high</span>
+<span class="pass">PASS</span>  wiki/vpn-keys §4    <span class="dim">verified · high</span>
+<span class="warn">WARN</span>  wiki/vpn-keys §5    <span class="dim">edit adds 1 sentence</span>
+<span class="drop">DROP</span>  vectors/18342       <span class="dim">hash mismatch</span>
+<span class="drop">DROP</span>  uploads/faq.pdf     <span class="dim">injection 0.97 · low</span>
+
+<span class="dim">served 3 of 5 · 1 queued for review · 6 ms</span></code></pre>
+  </figure>
 </section>
 
-<section class="wrap section">
+<section class="wrap section split">
   <h2>Three ways poisoned content reaches your model</h2>
-  <div class="grid three">
-    <article class="card"><h3>Edits around the pipeline</h3><p>Someone writes to the vector store directly, or changes a chunk after it was indexed.</p>
-      <p class="answer">Signatures catch it: <strong>125 of 125</strong> tampered chunks were dropped in testing.</p></article>
-    <article class="card"><h3>Low-trust sources</h3><p>Uploads, scraped pages and shared drives carry text aimed at the model.</p>
-      <p class="answer">Trust tiers keep it from being served silently: <strong>0</strong> silent hits in testing.</p></article>
-    <article class="card"><h3>A compromised trusted page</h3><p>An approved wiki page is edited. Signing can't help, because the page really is from your wiki.</p>
-      <p class="answer">Delta scoring isolates the edit, and this is where we are focusing our research.</p></article>
-  </div>
-</section>
-
-<section class="wrap section" id="how">
-  <h2>How it works</h2>
-  <ol class="steps">
-    <li><h3>Sign at ingestion</h3><p>Each chunk's hash and source metadata are signed with Ed25519 and kept in a provenance ledger, with key revocation.</p></li>
-    <li><h3>Score what changed</h3><p>When a page is re-ingested, RAG Shield compares it with the last signed version and scores only the new paragraphs or sentences, so a short payload isn't diluted by the legitimate page around it.</p></li>
-    <li><h3>Detect</h3><p>A local injection classifier and an embedding-outlier model score content. Nothing leaves your network.</p></li>
-    <li><h3>Filter at retrieval</h3><p>Unverifiable chunks are dropped. Suspicious trusted content is served with a warning and queued for review, never silently deleted. A lockdown switch serves only clean, verified chunks during an incident.</p></li>
+  <ol class="rows">
+    <li>
+      <span class="tag">T1</span>
+      <div><h3>Edits around the pipeline</h3><p>Someone writes to the vector store directly, or changes a chunk after it was indexed.</p></div>
+      <p class="outcome"><strong>Signatures catch it.</strong> 125 of 125 tampered chunks were dropped in testing.</p>
+    </li>
+    <li>
+      <span class="tag">T2</span>
+      <div><h3>Low-trust sources</h3><p>Uploads, scraped pages and shared drives carry text aimed at the model.</p></div>
+      <p class="outcome"><strong>Trust tiers stop silent hits.</strong> 0 of 88 poisoned chunks were served without a warning.</p>
+    </li>
+    <li>
+      <span class="tag">T3</span>
+      <div><h3>A compromised trusted page</h3><p>An approved wiki page is edited. Signing can't help, because the page really is from your wiki.</p></div>
+      <p class="outcome"><strong>Delta scoring isolates the edit.</strong> This is the open problem, and where our research is focused.</p>
+    </li>
   </ol>
 </section>
 
-<section class="wrap section" id="results">
-  <h2>What we have measured so far</h2>
-  <div class="table-wrap"><table>
-    <thead><tr><th>Measurement</th><th>Without RAG Shield</th><th>With RAG Shield</th></tr></thead>
-    <tbody>
-      <tr><td>Retrieval quality on clean data (recall@5)</td><td>0.553</td><td>0.553 (no loss)</td></tr>
-      <tr><td>Chunks edited directly in the vector store</td><td>served</td><td>125 / 125 dropped</td></tr>
-      <tr><td>Low-trust poison served silently</td><td>88 / 88</td><td>0 / 88</td></tr>
-      <tr><td>Attacks in a compromised trusted page flagged</td><td>11% (off-the-shelf classifier)</td><td>42% at 6.5% false alarms (delta scoring)</td></tr>
-      <tr><td>Added latency per retrieval (CPU)</td><td>–</td><td>≈ 6 ms</td></tr>
-    </tbody>
-  </table></div>
-  <p class="small muted">A 35-document synthetic security corpus with 125 published attacks from Microsoft's BIPIA benchmark (MIT), inserted
-    unchanged. One finding stands out: an off-the-shelf injection classifier separates attacks from ordinary security logs and incident
-    reports barely better than chance (AUROC 0.54). A security-tuned classifier is in progress. Full methodology will be published with the SDK.</p>
+<section class="wrap section split" id="how">
+  <h2>How it works</h2>
+  <ol class="pipeline">
+    <li><span class="step">sign</span><h3>Sign at ingestion</h3><p>Each chunk's hash and source metadata are signed with Ed25519 and kept in a provenance ledger, with key revocation.</p></li>
+    <li><span class="step">diff</span><h3>Score what changed</h3><p>When a page is re-ingested, only the new paragraphs or sentences are scored, so a short payload isn't diluted by the legitimate page around it.</p></li>
+    <li><span class="step">detect</span><h3>Detect locally</h3><p>An injection classifier and an embedding-outlier model score content. Nothing leaves your network.</p></li>
+    <li><span class="step">filter</span><h3>Filter at retrieval</h3><p>Unverifiable chunks are dropped. Suspicious trusted content is served with a warning and queued for review, never silently deleted. A lockdown switch serves only clean, verified chunks during an incident.</p></li>
+  </ol>
 </section>
 
-<section class="wrap section" id="partner">
-  <div class="two">
-    <div>
+<section class="wrap section split" id="results">
+  <h2>What we have measured so far</h2>
+  <div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Measurement</th><th>Without RAG Shield</th><th>With RAG Shield</th></tr></thead>
+      <tbody>
+        <tr><td>Retrieval quality on clean data (recall@5)</td><td class="num" data-label="Without">0.553</td><td class="num with" data-label="With">0.553, no loss</td></tr>
+        <tr><td>Chunks edited directly in the vector store</td><td class="num" data-label="Without">served</td><td class="num with" data-label="With">125 / 125 dropped</td></tr>
+        <tr><td>Low-trust poison served silently</td><td class="num" data-label="Without">88 / 88</td><td class="num with" data-label="With">0 / 88</td></tr>
+        <tr><td>Attacks in a compromised trusted page flagged</td><td class="num" data-label="Without">11%, off-the-shelf classifier</td><td class="num with" data-label="With">42% at 6.5% false alarms</td></tr>
+        <tr><td>Added latency per retrieval (CPU)</td><td class="num" data-label="Without">–</td><td class="num with" data-label="With">≈ 6 ms</td></tr>
+      </tbody>
+    </table></div>
+    <p class="fine note">A 35-document synthetic security corpus with 125 published attacks from Microsoft's BIPIA benchmark (MIT), inserted
+      unchanged. One finding stands out: an off-the-shelf injection classifier separates attacks from ordinary security logs and incident
+      reports barely better than chance (AUROC 0.54). A security-tuned classifier is in progress. Full methodology will be published with the SDK.</p>
+  </div>
+</section>
+
+<section class="band" id="partner">
+  <div class="wrap section two">
+    <div class="partner-copy">
       <h2>Become a design partner</h2>
       <p>We're working with a small number of teams that run RAG over content many people can edit: wikis, tickets, shared drives, vendor documents.</p>
       <h3>You get</h3>
-      <ul class="ticks"><li>RAG Shield free during the pilot, running in your environment</li><li>A guided provenance and poisoning review of your index, run in your environment so your data never leaves it (first 5 partners)</li><li>Direct input into the roadmap and integrations</li></ul>
+      <ul class="list"><li>RAG Shield free during the pilot, running in your environment</li><li>A guided provenance and poisoning review of your index, run in your environment so your data never leaves it (first 5 partners)</li><li>Direct input into the roadmap and integrations</li></ul>
       <h3>We ask for</h3>
-      <ul class="ticks"><li>A 30-minute feedback call every two weeks</li><li>Anonymized numbers: false alarms, added latency, setup time</li></ul>
+      <ul class="list"><li>A 30-minute feedback call every two weeks</li><li>Anonymized numbers: false alarms, added latency, setup time</li></ul>
       <p class="call-cta hidden" data-call>Rather talk first? <a data-call-link href="#">Book a 15-minute call</a>.</p>
     </div>
-    <form id="apply" class="card form" novalidate>
+    <form id="apply" class="panel form" novalidate>
       <div class="field"><label for="f-name">Name</label><input id="f-name" name="name" autocomplete="name" maxlength="100" required></div>
       <div class="field"><label for="f-email">Work email</label><input id="f-email" name="email" type="email" autocomplete="email" maxlength="200" required></div>
       <div class="row">
@@ -103,16 +132,16 @@
       </div>
       <div class="field"><label for="f-indexes">What does your assistant index, and who can edit it?</label>
         <textarea id="f-indexes" name="indexes" rows="3" maxlength="1000" required placeholder="e.g. 40k Confluence pages and Jira tickets; anyone in engineering can edit"></textarea></div>
-      <div class="field"><label for="f-stack">Framework and vector database <span class="muted">(optional)</span></label>
+      <div class="field"><label for="f-stack">Framework and vector database <span class="opt">optional</span></label>
         <input id="f-stack" name="stack" maxlength="300" placeholder="e.g. LangChain + pgvector"></div>
       <div class="hp" aria-hidden="true"><label for="f-website">Website</label><input id="f-website" name="website" tabindex="-1" autocomplete="off"></div>
       <label class="check"><input type="checkbox" name="wants_call"><span>I'd like a 15-minute call</span></label>
-      <label class="check"><input type="checkbox" name="consent" required><span>RAG Shield may contact me about the design-partner program (<a href="/privacy.html">privacy</a>)</span></label>
+      <label class="check"><input type="checkbox" name="consent" required><span>RAG Shield may contact me about the design-partner program (<a href="/privacy">privacy</a>)</span></label>
       <div class="cf-turnstile" data-sitekey="0x4AAAAAAFeMK7kIZTXZLjBA" data-theme="auto"></div>
       <button class="btn" type="submit">Apply</button>
       <p class="msg" role="status" aria-live="polite"></p>
     </form>
-    <div id="thanks" class="card hidden" tabindex="-1">
+    <div id="thanks" class="panel hidden" tabindex="-1">
       <h3>Thanks, we'll be in touch within two business days.</h3>
       <p class="muted">We read every application ourselves.</p>
       <p class="hidden" data-call><a class="btn" data-call-link href="#">Pick a time for a 15-minute call</a></p>
@@ -120,27 +149,29 @@
   </div>
 </section>
 
-<section class="wrap section" id="pricing">
+<section class="wrap section split" id="pricing">
   <h2>Pricing</h2>
-  <div class="grid three">
-    <article class="card plan"><h3>Open source</h3><p class="price">Free</p><ul class="ticks"><li>Python SDK: signing, delta scoring, trust filter</li><li>Local detectors</li><li>Runs entirely in your environment</li></ul></article>
-    <article class="card plan featured"><h3>Team</h3><p class="price">$800<span>/month</span></p><ul class="ticks"><li>Review dashboard and queue</li><li>Hosted scanning, up to 1M chunks</li><li>Provenance reports for audits</li></ul><p class="small muted">Free for design partners during the pilot.</p></article>
-    <article class="card plan"><h3>Enterprise</h3><p class="price">Custom</p><ul class="ticks"><li>SSO and audit export</li><li>On-premises deployment</li><li>Support and custom integrations</li></ul></article>
+  <div class="plans">
+    <article class="plan"><h3>Open source</h3><p class="price">Free</p><ul class="list"><li>Python SDK: signing, delta scoring, trust filter</li><li>Local detectors</li><li>Runs entirely in your environment</li></ul></article>
+    <article class="plan featured"><h3>Team</h3><p class="price">$800<span>/month</span></p><ul class="list"><li>Review dashboard and queue</li><li>Hosted scanning, up to 1M chunks</li><li>Provenance reports for audits</li></ul><p class="fine">Free for design partners during the pilot.</p></article>
+    <article class="plan"><h3>Enterprise</h3><p class="price">Custom</p><ul class="list"><li>SSO and audit export</li><li>On-premises deployment</li><li>Support and custom integrations</li></ul></article>
   </div>
 </section>
 
-<section class="wrap section faq">
+<section class="wrap section split faq">
   <h2>Questions</h2>
-  <details><summary>Does my data leave my network?</summary><p>No. The SDK, the detectors and the provenance ledger run in your environment. The hosted dashboard stores chunk IDs, scores and provenance metadata, not text, unless you turn on previews.</p></details>
-  <details><summary>Isn't a prompt-injection classifier enough?</summary><p>On our security corpus, an off-the-shelf classifier separated attacks from normal logs and incident reports barely better than chance. Provenance, delta scoring and calibration on your own content are what make detection usable.</p></details>
-  <details><summary>Will it delete legitimate content?</summary><p>Never on a detector score alone for trusted sources. Suspicious trusted content is served with a warning and goes to a human review queue.</p></details>
-  <details><summary>Which stacks are supported?</summary><p>Python RAG pipelines. LangChain, LlamaIndex, ChromaDB and pgvector adapters are planned for the first release.</p></details>
+  <div>
+    <details><summary>Does my data leave my network?</summary><p>No. The SDK, the detectors and the provenance ledger run in your environment. The hosted dashboard stores chunk IDs, scores and provenance metadata, not text, unless you turn on previews.</p></details>
+    <details><summary>Isn't a prompt-injection classifier enough?</summary><p>On our security corpus, an off-the-shelf classifier separated attacks from normal logs and incident reports barely better than chance. Provenance, delta scoring and calibration on your own content are what make detection usable.</p></details>
+    <details><summary>Will it delete legitimate content?</summary><p>Never on a detector score alone for trusted sources. Suspicious trusted content is served with a warning and goes to a human review queue.</p></details>
+    <details><summary>Which stacks are supported?</summary><p>Python RAG pipelines. LangChain, LlamaIndex, ChromaDB and pgvector adapters are planned for the first release.</p></details>
+  </div>
 </section>
 </main>
 
 <footer class="wrap footer">
   <span>© 2026 RAG Shield</span>
-  <span><a href="/privacy.html">Privacy</a> · <a href="mailto:hello@ragshield.dev">hello@ragshield.dev</a> · <a class="hidden" data-github-link href="#">GitHub</a></span>
+  <span><a href="/privacy">Privacy</a> · <a href="mailto:hello@ragshield.dev">hello@ragshield.dev</a><a class="hidden" data-github-link href="#"> · GitHub</a></span>
 </footer>
 </body>
 </html>
