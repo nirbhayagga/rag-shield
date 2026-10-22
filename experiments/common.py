@@ -15,6 +15,7 @@ from ragshield.provenance import Ledger, Signer, sha256  # noqa: E402
 from ragshield.shield import Policy, Shield  # noqa: E402
 
 H.RESULTS_DIR = HERE / 'results'
+H.RESULTS_DIR.mkdir(exist_ok=True)  # gitignored, so missing in a fresh clone
 CACHE = HERE / 'results/cache'
 
 
