@@ -14,7 +14,8 @@ Leakage controls:
   - BIPIA train items train; BIPIA test items are only used for the final report
   - 15% of BIPIA train items and 15% of training negatives are held out for checkpoint selection
 Report: base vs fine-tuned on test documents with BIPIA test attacks: AUROC, TPR at 1% and 5% FPR, FPR at 0.5,
-plus deepset's test split as an out-of-domain check. Writes models/<name>/ and results/finetune_<name>.json.
+plus deepset's test split (out-of-domain when trained without --deepset, in-domain with it). Writes models/<name>/ and
+results/finetune_<name>.json.
 
   python finetune_injection.py --device cuda                 # RTX 4080: bf16, a few minutes
   python finetune_injection.py --device cuda --precision fp16 --batch 8 --grad-accum 2   # RTX 2080 (no fast bf16)
@@ -43,7 +44,7 @@ parser.add_argument('--max-len', type=int, default=512)
 parser.add_argument('--precision', choices=['auto', 'bf16', 'fp16', 'fp32'], default='auto')
 parser.add_argument('--test-frac', type=float, default=0.3)
 parser.add_argument('--hosts-per-attack', type=int, default=3)
-parser.add_argument('--deepset', action='store_true', help='add deepset/prompt-injections train split (needs pyarrow)')
+parser.add_argument('--deepset', action='store_true', help='also train on deepset/prompt-injections (its test split is then in-domain)')
 parser.add_argument('--seed', type=int, default=13)
 parser.add_argument('--dry-run', action='store_true')
 args = parser.parse_args()
@@ -141,18 +142,18 @@ test_sets = {
               [(t, 0, 'sentence') for t in rng.sample(te_sents, min(len(te_sents), 300))],
 }
 
-if args.deepset:
-    import pandas as pd
-    from huggingface_hub import hf_hub_download, list_repo_files
-    files = list_repo_files('deepset/prompt-injections', repo_type='dataset')
-    for part in ('train', 'test'):
-        path = hf_hub_download('deepset/prompt-injections', next(f for f in files if f.endswith('.parquet') and part in f), repo_type='dataset')
-        frame = pd.read_parquet(path)
-        rows = [(str(t), int(label), 'deepset') for t, label in zip(frame['text'], frame['label'])]
-        if part == 'train':
-            train_set += rows
-        else:
-            test_sets['deepset_out_of_domain'] = rows
+# deepset's test split is always reported; it only counts as out-of-domain when its train split was not used.
+import pandas as pd
+from huggingface_hub import hf_hub_download, list_repo_files
+files = list_repo_files('deepset/prompt-injections', repo_type='dataset')
+for part in ('train', 'test') if args.deepset else ('test',):
+    path = hf_hub_download('deepset/prompt-injections', next(f for f in files if f.endswith('.parquet') and part in f), repo_type='dataset')
+    frame = pd.read_parquet(path)
+    rows = [(str(t), int(label), 'deepset') for t, label in zip(frame['text'], frame['label'])]
+    if part == 'train':
+        train_set += rows
+    else:
+        test_sets['deepset_in_domain' if args.deepset else 'deepset_out_of_domain'] = rows
 
 if args.dry_run:
     train_set = rng.sample(train_set, 32)
