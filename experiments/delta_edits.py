@@ -6,7 +6,10 @@ Every trusted Vandelay page is ingested as version 1. Then, one at a time and re
   benign edits  125 edits of the same two styles whose added text is a real paragraph or sentence from another Vandelay
                 document of the same type, plus every real reissue pair in the corpus (id and id-reissue)
 The off-topic threshold is calibrated on the first half of the benign edits (target 5% false alarms) and reported on the
-second half, so no reported number is tuned on the data it is reported for. Writes results/delta_edits.json."""
+second half, so no reported number is tuned on the data it is reported for. Writes results/delta_edits.json.
+
+With --injection-model and --split test (for a fine-tuned classifier), only held-out documents are edited or supply benign
+text, and the report goes to results/delta_edits-<model>-<split>.json."""
 import argparse
 import json
 import random
@@ -15,7 +18,7 @@ import time
 
 import numpy as np
 
-from common import HERE, CachedEmbedder, CachedInjection, make_shield, vandelay
+from common import HERE, CachedEmbedder, CachedInjection, add_eval_args, eval_doc_ids, make_shield, out_path, vandelay
 from ragshield import delta
 from ragshield.shield import Policy
 
@@ -24,11 +27,14 @@ parser.add_argument('--device', default=None)
 parser.add_argument('--k', type=int, default=5)
 parser.add_argument('--seed', type=int, default=11)
 parser.add_argument('--target-fpr', type=float, default=0.05)
+add_eval_args(parser)
 args = parser.parse_args()
 
 docs, _ = vandelay()
 by_id = {d.doc_id: d for d in docs}
-embedder, injection = CachedEmbedder(device=args.device), CachedInjection(device=args.device)
+embedder, injection = CachedEmbedder(device=args.device), CachedInjection(args.injection_model, device=args.device)
+eligible = eval_doc_ids(docs, args.split)
+pool = [d for d in docs if d.doc_id in eligible]  # pages that may be edited or lend benign text
 rng = random.Random(args.seed)
 
 attacks = []
@@ -50,7 +56,7 @@ def edit(doc, added, style):
 
 
 def benign_text(doc, style):
-    others = [d for d in docs if d.doc_type == doc.doc_type and d.doc_id != doc.doc_id] or [d for d in docs if d.doc_id != doc.doc_id]
+    others = [d for d in pool if d.doc_type == doc.doc_type and d.doc_id != doc.doc_id] or [d for d in pool if d.doc_id != doc.doc_id]
     source = rng.choice(others)
     paras = [p for p in delta.paragraphs(source.text) if 80 <= len(p) <= 700] or delta.paragraphs(source.text)
     para = rng.choice(paras)
@@ -62,21 +68,21 @@ def benign_text(doc, style):
 
 cases = []
 for n, attack in enumerate(attacks):
-    doc = rng.choice(docs)
+    doc = rng.choice(pool)
     style = 'paragraph' if n % 2 == 0 else 'inline'
     text, probe = edit(doc, attack['text'], style)
     cases.append({'kind': 'attack', 'id': f'a{n:03d}', 'doc': doc.doc_id, 'style': style, 'category': f"{attack['split']}:{attack['category']}",
                   'added': attack['text'], 'text': text, 'probe': probe})
 for n in range(len(attacks)):
-    doc = rng.choice(docs)
+    doc = rng.choice(pool)
     style = 'paragraph' if n % 2 == 0 else 'inline'
     added = benign_text(doc, style)
     text, probe = edit(doc, added, style)
     # Halves are assigned in pairs so both edit styles appear in both the calibration and the test half.
     cases.append({'kind': 'benign', 'id': f'b{n:03d}', 'doc': doc.doc_id, 'style': style, 'added': added, 'text': text, 'probe': probe,
                   'half': 'calibration' if (n // 2) % 2 == 0 else 'test'})
-for d in docs:
-    if d.doc_id + '-reissue' in by_id:
+for d in pool:
+    if d.doc_id + '-reissue' in eligible:
         cases.append({'kind': 'benign_real', 'id': f'r-{d.doc_id}', 'doc': d.doc_id, 'style': 'reissue',
                       'added': '', 'text': by_id[d.doc_id + '-reissue'].text, 'probe': d.title, 'half': 'test'})
 
@@ -156,6 +162,7 @@ retrieved = [c for c in attack_rows if c['final'].get('retrieved_unshielded')]
 outcomes = {o: sum(c['final']['outcome'] == o for c in retrieved) for o in ('served_silently', 'served_with_warning', 'suppressed')}
 result = {
     'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'seed': args.seed,
+    'injection_model': args.injection_model, 'split': args.split, 'eval_docs': len(pool),
     'attack_source': 'microsoft/BIPIA benchmark/{text,code}_attack_test.json (MIT)',
     'calibration': {'benign_calibration_edits': int(len(calibration)), 'target_fpr': args.target_fpr,
                     'offtopic_threshold': round(threshold, 4), 'delta_injection_threshold': round(inj_threshold, 4)},
@@ -175,5 +182,5 @@ result = {
 for c in attack_rows:
     if not c['final']['flagged']:
         result['missed_attacks_by_category'][c['category']] = result['missed_attacks_by_category'].get(c['category'], 0) + 1
-(HERE / 'results/delta_edits.json').write_text(json.dumps({**result, 'cases': [{k: v for k, v in c.items() if k != 'text'} for c in cases]}, indent=2))
+out_path('delta_edits', args).write_text(json.dumps({**result, 'cases': [{k: v for k, v in c.items() if k != 'text'} for c in cases]}, indent=2))
 print(json.dumps(result, indent=2))

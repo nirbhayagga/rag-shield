@@ -23,6 +23,31 @@ def vandelay():
     return H.load_corpus(HERE / 'data/vandelay/corpus'), H.load_questions(HERE / 'data/vandelay/questions.yaml')
 
 
+def add_eval_args(parser):
+    parser.add_argument('--injection-model', default=INJECTION_MODEL, help='Hugging Face id or local path (e.g. models/ragshield-injection-v1)')
+    parser.add_argument('--split', choices=['all', 'test'], default='all',
+                        help='test: attack hosts, edited pages and clean-rate chunks come only from the held-out documents in data/splits.json')
+
+
+def eval_doc_ids(docs, split):
+    """Documents whose chunks may host attacks or count as clean negatives. A fine-tuned classifier saw train_docs, so it
+    must be scored on test_docs only."""
+    if split == 'all':
+        return {d.doc_id for d in docs}
+    return set(json.loads((HERE / 'data/splits.json').read_text())['test_docs'])
+
+
+def model_tag(model):
+    return Path(model).name if Path(model).is_dir() else 'base'
+
+
+def out_path(stem, args):
+    """results/<stem>.json for the original setup, results/<stem>-<model>-<split>.json otherwise."""
+    if args.injection_model == INJECTION_MODEL and args.split == 'all':
+        return HERE / f'results/{stem}.json'
+    return HERE / f'results/{stem}-{model_tag(args.injection_model)}-{args.split}.json'
+
+
 class CachedEmbedder:
     def __init__(self, model=DEFAULT_MODEL, device=None):
         self.name, self.device, self._model = model, device, None
@@ -55,7 +80,11 @@ class CachedEmbedder:
 class CachedInjection:
     def __init__(self, model=INJECTION_MODEL, device=None):
         self.name, self.device, self._model = model, device, None
-        self.path = CACHE / f"inj-{model.replace('/', '_')}.json"
+        key = model.replace('/', '_')
+        if Path(model).is_dir():  # a local fine-tune: key the cache by its weights, so retraining invalidates it
+            weights = Path(model) / 'model.safetensors'
+            key = f'{Path(model).name}-{sha256(str(weights.stat().st_size) + str(weights.stat().st_mtime_ns))[:12]}'
+        self.path = CACHE / f'inj-{key}.json'
         self.cache = json.loads(self.path.read_text()) if self.path.exists() else {}
 
     def score(self, texts):

@@ -6,7 +6,10 @@ copy of a randomly chosen clean Vandelay chunk (start, middle or end). Three thr
   T2  poisoned documents from a low-trust source (e.g. an upload or web scrape)
   T3  poisoned documents from a trusted source (a compromised wiki page): only the detectors can help
 Policy constants were fixed on clean data (experiment 1) before this run; only warn_weight is swept, and each setting
-is reported with its clean-recall cost. Writes results/attack_bipia.json."""
+is reported with its clean-recall cost. Writes results/attack_bipia.json.
+
+With --injection-model and --split test (for a fine-tuned classifier), attacks are hosted only in held-out documents, clean
+rates come only from their chunks, and the report goes to results/attack_bipia-<model>-<split>.json."""
 import argparse
 import json
 import random
@@ -15,7 +18,7 @@ import time
 
 import numpy as np
 
-from common import HERE, H, CachedEmbedder, CachedInjection, make_shield, vandelay
+from common import HERE, H, CachedEmbedder, CachedInjection, add_eval_args, eval_doc_ids, make_shield, out_path, vandelay
 from ragshield import chunking
 from ragshield.shield import Policy
 
@@ -23,18 +26,20 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--device', default=None)
 parser.add_argument('--k', type=int, default=5)
 parser.add_argument('--seed', type=int, default=7)
+add_eval_args(parser)
 args = parser.parse_args()
 WEIGHTS = [1.0, 0.85, 0.5]
 
 docs, questions = vandelay()
-embedder, injection = CachedEmbedder(device=args.device), CachedInjection(device=args.device)
+embedder, injection = CachedEmbedder(device=args.device), CachedInjection(args.injection_model, device=args.device)
+eligible = eval_doc_ids(docs, args.split)
 
 attacks = []
 for split in ('text', 'code'):
     for category, items in json.loads((HERE / f'data/external/bipia/{split}_attack_test.json').read_text()).items():
         attacks += [{'split': split, 'category': category, 'text': t} for t in items]
 
-clean_chunks = [(d.doc_id, i, c) for d in docs for i, c in enumerate(chunking.chunk(d.text))]
+clean_chunks = [(d.doc_id, i, c) for d in docs if d.doc_id in eligible for i, c in enumerate(chunking.chunk(d.text))]
 rng = random.Random(args.seed)
 poisons = []
 for n, attack in enumerate(attacks):
@@ -70,7 +75,8 @@ def payload_chunk(shield, poison):
 t0 = time.time()
 clean = build()
 results = {'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'attacks': len(poisons),
-           'source': 'microsoft/BIPIA benchmark/{text,code}_attack_test.json (MIT)', 'seed': args.seed, 'k': args.k}
+           'source': 'microsoft/BIPIA benchmark/{text,code}_attack_test.json (MIT)', 'seed': args.seed, 'k': args.k,
+           'injection_model': args.injection_model, 'split': args.split, 'eval_docs': len(eligible)}
 
 # Clean-recall cost of each ranking setting (no poison present).
 results['clean_recall'] = {}
@@ -82,11 +88,22 @@ for w in WEIGHTS:
 off = H.eval_retrieval('bipia-clean', {'shield': 'off'}, lambda q, k: clean.retrieve(q, k, shielded=False),
                        k=args.k, questions=questions, verbose=False)
 results['clean_recall']['off'] = round(float(off.recall.mean()), 4)
+if args.split == 'test':
+    # Questions answered only by held-out documents: the classifier never saw their text.
+    test_qs = [q for q in questions if q['gold_doc_ids'] and set(q['gold_doc_ids']) <= eligible]
+    clean.policy.warn_weight = 0.85
+    results['clean_recall_test_doc_questions'] = {
+        'n': len(test_qs),
+        'on': round(float(H.eval_retrieval('bipia-clean-test', {'shield': 'on'}, lambda q, k: clean.retrieve(q, k),
+                                           k=args.k, questions=test_qs, verbose=False).recall.mean()), 4) if test_qs else None,
+        'off': round(float(H.eval_retrieval('bipia-clean-test', {'shield': 'off'}, lambda q, k: clean.retrieve(q, k, shielded=False),
+                                            k=args.k, questions=test_qs, verbose=False).recall.mean()), 4) if test_qs else None}
 
 # Detector rates on clean chunks. The outlier rate comes from held-out folds (each chunk scored by a model that did not
 # see it), aligned with the index order the model was fitted in.
-inj_clean = np.array([clean.ledger.get(cid)[0].scores['injection'] for cid in clean.index.ids])
-out_clean = clean.outlier.heldout_scores > clean.outlier.threshold
+mask = np.array([cid.split('::')[0] in eligible for cid in clean.index.ids])
+inj_clean = np.array([clean.ledger.get(cid)[0].scores['injection'] for cid in clean.index.ids])[mask]
+out_clean = (clean.outlier.heldout_scores > clean.outlier.threshold)[mask]
 
 scenarios = {}
 for name, source, tier in [('T2_low_trust_source', 'external-upload', 'low'), ('T3_trusted_source', 'vandelay-internal', 'high')]:
@@ -119,7 +136,7 @@ for name, source, tier in [('T2_low_trust_source', 'external-upload', 'low'), ('
 
 # T2b: the attacker targets topics no trusted document covers. 7 documents are left out of the trusted corpus and their
 # topics exist only as poisoned low-trust copies, so no trusted twin can outrank them.
-held = set(random.Random(args.seed + 2).sample([d.doc_id for d in docs], 7))
+held = set(random.Random(args.seed + 2).sample([d.doc_id for d in docs if d.doc_id in eligible], 7))  # corpus order, as before
 held_chunks = [c for c in clean_chunks if c[0] in held]
 t2b = make_shield(embedder, injection, Policy())
 for d in docs:
@@ -174,5 +191,5 @@ results['T1_direct_store_writes'] = {'tampered_chunks': len(targets), 'caught_by
 
 results['scenarios'] = {k: v['summary'] for k, v in scenarios.items()}
 results['runtime_sec'] = round(time.time() - t0, 1)
-(HERE / 'results/attack_bipia.json').write_text(json.dumps({**results, 'rows': {k: v['rows'] for k, v in scenarios.items()}}, indent=2))
+out_path('attack_bipia', args).write_text(json.dumps({**results, 'rows': {k: v['rows'] for k, v in scenarios.items()}}, indent=2))
 print(json.dumps(results, indent=2))

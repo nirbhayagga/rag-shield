@@ -61,26 +61,36 @@ Model calls are cached in `results/cache/` by model and text hash, so reruns and
 ## Run on the RTX 4080 (or 2080)
 
 ```bash
-# from this laptop:
-rsync -a --exclude .venv --exclude results/cache projects/rag-shield/ <gpu-host>:rag-shield/
-# then on the GPU machine:
-cd ~/rag-shield
-python3.12 -m venv .venv
+git clone https://github.com/nirbhayagga/rag-shield.git && cd rag-shield
+# copy the private files (gitignored) from the machine that has them: data/vandelay/ and vendor/eval_harness.py
+python3.12 -m venv .venv          # or: mamba create -n ragshield python=3.12 && mamba activate ragshield
 .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cu128
-.venv/bin/pip install -r requirements.txt pyarrow
+.venv/bin/pip install -r requirements.txt
 .venv/bin/python -c "import torch; print(torch.cuda.get_device_name(0), torch.cuda.is_bf16_supported())"
 cd experiments
-../.venv/bin/python finetune_injection.py --device cuda --deepset          # 4080: bf16, about 5-10 minutes
-# RTX 2080 (Turing has no fast bf16):
-../.venv/bin/python finetune_injection.py --device cuda --precision fp16 --batch 8 --grad-accum 2 --deepset
+../.venv/bin/python finetune_injection.py --device cuda --dry-run                     # smoke test
+../.venv/bin/python finetune_injection.py --device cuda --name ragshield-injection-v1-nodeepset   # about a minute on a 4080
+../.venv/bin/python finetune_injection.py --device cuda --deepset                     # also trains on deepset
+# RTX 2080 (Turing has no fast bf16): add --precision fp16 --batch 8 --grad-accum 2
 ```
 
-The fine-tune output goes to `models/ragshield-injection-v1/` and the report to `results/finetune_ragshield-injection-v1.json`.
-The report compares base and fine-tuned models on **held-out documents only**, with BIPIA **test** attacks, in three styles
-(whole chunk, delta, inline). It reports AUROC, TPR at 1% and 5% FPR, FPR at 0.5, and deepset's test split as an
-out-of-domain check. Copy `results/` and `data/splits.json` back to this machine afterwards.
+Each run writes `models/<name>/` and `results/finetune_<name>.json`. The report compares base and fine-tuned models on
+**held-out documents only**, with BIPIA **test** attacks, in three styles (whole chunk, delta, inline): AUROC, TPR at 1% and
+5% FPR, and FPR at 0.5. deepset's test split is always reported, as `deepset_out_of_domain` when deepset was not used for
+training and as `deepset_in_domain` when it was.
 
-Smoke-test the whole pipeline on CPU first with `--dry-run`.
+### End-to-end with a fine-tuned classifier
+
+The fine-tune saw the 25 training documents, so the pipeline experiments must use only the 10 held-out ones:
+
+```bash
+../.venv/bin/python attack_bipia.py --injection-model ../models/ragshield-injection-v1-nodeepset --split test
+../.venv/bin/python delta_edits.py  --injection-model ../models/ragshield-injection-v1-nodeepset --split test
+../.venv/bin/python attack_bipia.py --split test     # base classifier on the same documents, for comparison
+../.venv/bin/python delta_edits.py  --split test
+```
+
+These write `results/<experiment>-<model>-<split>.json` (`base` for the off-the-shelf classifier).
 
 ## Results
 
