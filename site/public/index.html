@@ -89,7 +89,7 @@
     <article>
       <h3>A compromised trusted page</h3>
       <p>An approved wiki page is edited. Signing can't help, because the page really is from your wiki.</p>
-      <p class="result"><strong>Delta scoring isolates the edit.</strong> This is the open problem, and our research focus.</p>
+      <p class="result"><strong>Delta scoring isolates the edit.</strong> With our fine-tuned classifier, 98% of poisoned edits were flagged on documents it never saw.</p>
     </article>
   </div>
   <figure class="diff">
@@ -157,10 +157,11 @@ shield.ingest(<span class="str">"wiki/vpn-keys"</span>, page_text,
   <div class="ruled four stats">
     <div><p class="big">125<span>/125</span></p><p>chunks edited in the vector store were dropped</p><p class="base"><span>without</span>all 125 served</p></div>
     <div><p class="big">0<span>/88</span></p><p>low-trust poisoned chunks were served without a warning</p><p class="base"><span>without</span>88 of 88</p></div>
-    <div><p class="big">42<span>%</span></p><p>of attacks in a compromised page flagged, at 6.5% false alarms</p><p class="base"><span>off-the-shelf classifier</span>11% flagged</p></div>
+    <div><p class="big">98<span>%</span></p><p>of poisoned edits to a trusted page flagged, at 3.2% false alarms</p><p class="base"><span>off-the-shelf classifier</span>23% flagged</p></div>
     <div><p class="big">6<span> ms</span></p><p>added per retrieval on a CPU</p><p class="base"><span>retrieval quality</span>recall@5 unchanged</p></div>
   </div>
   <p class="fine note">Measured on a 35-document synthetic security corpus with 125 published attacks from Microsoft's BIPIA benchmark (MIT).
+    The trusted-page figure uses only the 10 documents and the BIPIA test attacks our fine-tuned classifier never saw in training.
     Full methodology will be published with the SDK.</p>
 </section>
 
@@ -232,7 +233,7 @@ shield.ingest(<span class="str">"wiki/vpn-keys"</span>, page_text,
   <h2>Questions</h2>
   <div class="faq-list">
     <details><summary>Does my data leave my network?</summary><p>No. The SDK, the detectors and the provenance ledger run in your environment. The hosted dashboard stores chunk IDs, scores and provenance metadata, not text, unless you turn on previews.</p></details>
-    <details><summary>Isn't a prompt-injection classifier enough?</summary><p>On our security corpus, an off-the-shelf classifier separated attacks from normal logs and incident reports barely better than chance (AUROC 0.54). Provenance, delta scoring and calibration on your own content are what make detection usable.</p></details>
+    <details><summary>Isn't a prompt-injection classifier enough?</summary><p>On our security corpus, an off-the-shelf classifier separated attacks from normal logs and incident reports barely better than chance (AUROC 0.54) and flagged 23% of poisoned edits. Fine-tuned on similar content, it flagged 98% on documents it had not seen. Provenance, delta scoring and calibration on your own content are what make detection usable.</p></details>
     <details><summary>Will it delete legitimate content?</summary><p>Never on a detector score alone for trusted sources. Suspicious trusted content is served with a warning and goes to a human review queue.</p></details>
     <details><summary>What happens during an incident?</summary><p>A lockdown switch serves only verified chunks with no warnings at all while you investigate.</p></details>
     <details><summary>Which stacks are supported?</summary><p>Python RAG pipelines. LangChain, LlamaIndex, ChromaDB and pgvector adapters are planned for the first release.</p></details>
