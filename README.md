@@ -1,8 +1,6 @@
 # RAG Shield
 
 Signed provenance, poisoning detection and a retrieval-time trust filter for RAG pipelines.
-The proposal is in [docs/proposals/rag-shield.md](../../docs/proposals/rag-shield.md) and the interview kit in
-[docs/rag-shield-interview-kit.md](../../docs/rag-shield-interview-kit.md).
 
 ## How it works
 
@@ -45,7 +43,7 @@ Without them, the unit tests still run (one class-contract test is skipped), but
 ## Run (CPU)
 
 ```bash
-cd projects/rag-shield
+cd rag-shield
 python3.12 -m venv .venv
 .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
 .venv/bin/pip install -r requirements.txt
