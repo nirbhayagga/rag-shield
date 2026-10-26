@@ -42,15 +42,19 @@ class OutlierDetector:
 
     def _lof(self, X):
         from sklearn.neighbors import LocalOutlierFactor
-        return LocalOutlierFactor(n_neighbors=min(self.n_neighbors, len(X) - 1), novelty=True, metric='cosine').fit(X)
+        return LocalOutlierFactor(n_neighbors=max(1, min(self.n_neighbors, len(X) - 1)), novelty=True, metric='cosine').fit(X)
 
     def fit(self, X):
         X = np.asarray(X, dtype=np.float32)
+        if len(X) < 2:  # LOF needs at least two points; with less, nothing is an outlier
+            self.model, self.threshold, self.heldout_scores = None, float('inf'), np.zeros(len(X), dtype=np.float32)
+            return self
         rng = np.random.default_rng(self.seed)
         order = rng.permutation(len(X))
         held = np.zeros(len(X), dtype=np.float32)
-        for fold in np.array_split(order, self.folds):
-            rest = np.setdiff1d(order, fold)
+        folds = self.folds if len(X) >= 2 * self.folds else 1  # too few trusted chunks for held-out folds: fit-set scores
+        for fold in np.array_split(order, folds):
+            rest = np.setdiff1d(order, fold) if folds > 1 else order
             held[fold] = -self._lof(X[rest]).score_samples(X[fold])
         self.heldout_scores = held
         self.threshold = float(np.quantile(held, 1 - self.target_fpr))
@@ -58,7 +62,8 @@ class OutlierDetector:
         return self
 
     def score(self, X):
-        return -self.model.score_samples(np.asarray(X, dtype=np.float32))
+        X = np.asarray(X, dtype=np.float32)
+        return -self.model.score_samples(X) if self.model is not None else np.zeros(len(X), dtype=np.float32)
 
     def flag(self, X):
         return self.score(X) > self.threshold

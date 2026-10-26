@@ -5,6 +5,7 @@ Such a chunk either has no ledger record or its text no longer matches the signe
 It does not, by itself, catch poisoned content that arrives through an approved source; the detectors do that."""
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -60,9 +61,10 @@ class Signer:
             return cls(serialization.load_pem_private_key(path.read_bytes(), password=None))
         signer = cls.generate()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(signer.private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                                          serialization.NoEncryption()))
-        path.chmod(0o600)
+        pem = signer.private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                              serialization.NoEncryption())
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as f:  # private from the first byte
+            f.write(pem)
         return signer
 
     def sign(self, record):
@@ -107,7 +109,9 @@ class Ledger:
 
     def put(self, record):
         with self.lock, self.db:
-            self.db.execute('insert or replace into chunks(chunk_id, record) values(?,?)', (record.chunk_id, json.dumps(asdict(record))))
+            # upsert on the record only: 'insert or replace' would re-insert the row and reset quarantined/reason
+            self.db.execute('insert into chunks(chunk_id, record) values(?,?) on conflict(chunk_id) do update set record=excluded.record',
+                            (record.chunk_id, json.dumps(asdict(record))))
 
     def get(self, chunk_id):
         row = self.db.execute('select record, quarantined, reason from chunks where chunk_id=?', (chunk_id,)).fetchone()
