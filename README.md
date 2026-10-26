@@ -13,7 +13,9 @@ Signed provenance, poisoning detection and a retrieval-time trust filter for RAG
 | Index | `ragshield/index.py` | Minimal cosine index with the adapter surface for ChromaDB/pgvector |
 
 The policy is deliberately asymmetric. Trusted, signed sources are never deleted on a classifier score alone (warn + review).
-Low and medium-trust sources are dropped on high scores. Unverifiable chunks are always dropped.
+Low and medium-trust sources are dropped on a high injection score or a flagged edit (off-topic or injection-like additions),
+and low-trust chunks that also carry a warning are dropped when their ranking weight falls below `Policy.min_rank`.
+Unverifiable chunks are always dropped.
 
 ## Data
 
@@ -82,13 +84,27 @@ training and as `deepset_in_domain` when it was.
 The fine-tune saw the 25 training documents, so the pipeline experiments must use only the 10 held-out ones:
 
 ```bash
-../.venv/bin/python attack_bipia.py --injection-model ../models/ragshield-injection-v1-nodeepset --split test
-../.venv/bin/python delta_edits.py  --injection-model ../models/ragshield-injection-v1-nodeepset --split test
+../.venv/bin/python attack_bipia.py --injection-model ../models/ragshield-injection-v1 --split test
+../.venv/bin/python delta_edits.py  --injection-model ../models/ragshield-injection-v1 --split test
 ../.venv/bin/python attack_bipia.py --split test     # base classifier on the same documents, for comparison
 ../.venv/bin/python delta_edits.py  --split test
 ```
 
-These write `results/<experiment>-<model>-<split>.json` (`base` for the off-the-shelf classifier).
+These write `results/<experiment>-<model>-<split>.json` (`base` for the off-the-shelf classifier). The shipped model is
+`ragshield-injection-v1` (trained with deepset): the `-nodeepset` variant scores slightly better on the Vandelay held-out
+documents but flags 62.5% of deepset's benign prompts, so it has learned the corpus rather than injection. Every number in
+the proposal and on the site comes from `-v1`.
+
+### Reading the numbers
+
+- `suppressed` = `dropped` (the filter removed the chunk) + `outranked` (kept, but the trust weight pushed it below the
+  top k). Most low-trust suppressions are outranking, not detection; the T3 and delta-edit tables are the detection claims.
+- `silent_attack_success_rate` is 0 for low-trust sources *by policy*: a low-tier chunk is always served with a label.
+- The calibrated `delta_injection` threshold is the 1 − target FPR quantile of benign edits. With 63 calibration edits and
+  the off-the-shelf classifier that quantile is ≈1.0, so for the base model the injection channel is effectively off and
+  its delta-scoring gain comes from the off-topic score alone. The fine-tuned model separates the two, so its threshold is
+  informative (0.96 and 0.008 in the two runs).
+- `tpr_at_1pct_fpr` is only reported when the negative set has at least 100 items.
 
 ## Results
 
@@ -97,7 +113,10 @@ See `results/*.json`. The summary is kept in the proposal's §4 table.
 ## Limits
 
 - The ledger is SQLite with a local PEM key. Production needs Postgres and a KMS or HSM.
-- Document version history is stored unsigned.
+- Document version history and detector scores are stored unsigned: the signature covers the chunk's identity, tier, position
+  and hash, so anyone with ledger write access can lower a score. Signing verdicts (or keying quarantine to a reviewer) is
+  November work.
+- Revoking a key drops every chunk it ever signed; re-signing on rotation is not implemented.
 - The ChromaDB and pgvector adapters, the review dashboard and Haiku reviewer summaries are November work.
 - Benign edits in experiment 3 are built from other Vandelay documents of the same type. That is likely *harder* (more
   off-topic) than real edits, so its false-alarm rate is a conservative estimate.
