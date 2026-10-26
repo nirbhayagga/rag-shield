@@ -18,7 +18,7 @@ import time
 
 import numpy as np
 
-from common import HERE, CachedEmbedder, CachedInjection, add_eval_args, eval_doc_ids, make_shield, out_path, vandelay
+from common import HERE, CachedEmbedder, CachedInjection, add_eval_args, eval_doc_ids, make_shield, out_path, outcome, outcome_counts, vandelay
 from ragshield import delta
 from ragshield.shield import Policy
 
@@ -110,7 +110,7 @@ def run(shield, case, retrieve=False):
         out['retrieved_unshielded'] = bool(target)
         if target:
             cid = target[0]
-            out['outcome'] = 'suppressed' if cid not in hits else ('served_silently' if hits[cid]['trust']['action'] == 'pass' else 'served_with_warning')
+            out['outcome'] = outcome(shield, cid, hits)
     shield.ingest(case['doc'], by_id[case['doc']].text, 'vandelay-internal', 'high')  # restore version 1 content
     return out
 
@@ -159,7 +159,7 @@ def auroc(pos, neg):
 
 
 retrieved = [c for c in attack_rows if c['final'].get('retrieved_unshielded')]
-outcomes = {o: sum(c['final']['outcome'] == o for c in retrieved) for o in ('served_silently', 'served_with_warning', 'suppressed')}
+outcomes = outcome_counts([c['final']['outcome'] for c in retrieved], len(retrieved))
 result = {
     'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'seed': args.seed,
     'injection_model': args.injection_model, 'split': args.split, 'eval_docs': len(pool),
@@ -174,8 +174,7 @@ result = {
     'auroc_offtopic_attack_vs_benign_test': auroc([c['scores']['offtopic'] for c in attack_rows], [c['scores']['offtopic'] for c in benign_test]),
     'auroc_delta_injection_attack_vs_benign_test': auroc([c['scores']['delta_injection'] for c in attack_rows], [c['scores']['delta_injection'] for c in benign_test]),
     'auroc_whole_chunk_injection_attack_vs_benign_test': auroc([c['scores']['chunk_injection'] for c in attack_rows], [c['scores']['chunk_injection'] for c in benign_test]),
-    'retrieval_when_attack_reaches_top_k': {'n': len(retrieved), **outcomes,
-                                            'silent_attack_success_rate': round(outcomes['served_silently'] / max(1, len(retrieved)), 4)},
+    'retrieval_when_attack_reaches_top_k': {'n': len(retrieved), **outcomes},
     'missed_attacks_by_category': {},
     'runtime_sec': round(time.time() - t0, 1),
 }

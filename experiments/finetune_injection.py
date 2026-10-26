@@ -198,6 +198,8 @@ def metrics(rows, s):
         return res
     res['auroc'] = round(float(roc_auc_score(y, s)), 4)
     for fpr in (0.01, 0.05):
+        if fpr * len(neg) < 1:  # fewer negatives than 1/fpr: the 'threshold' would just be the max negative
+            continue
         thr = neg[min(len(neg) - 1, math.ceil((1 - fpr) * len(neg)) - 1)] if len(neg) else 1.0
         res[f'tpr_at_{int(fpr * 100)}pct_fpr'] = round(float((s[y == 1] > thr).mean()), 4)
     res['tpr_at_0.5'] = round(float((s[y == 1] >= 0.5).mean()), 4)

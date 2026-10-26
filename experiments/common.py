@@ -101,6 +101,25 @@ class CachedInjection:
         return np.array([self.cache[k] for k in keys], dtype=np.float32)
 
 
+OUTCOMES = ('served_silently', 'served_with_warning', 'dropped', 'outranked')
+
+
+def outcome(shield, cid, hits):
+    """What happened to chunk cid under the shield: served (silently or with a warning), dropped by the filter, or
+    outranked (kept, but pushed below the top k by the trust weight). 'suppressed' in older results = dropped + outranked."""
+    if cid in hits:
+        return 'served_silently' if hits[cid]['trust']['action'] == 'pass' else 'served_with_warning'
+    text = shield.index.texts[shield.index.ids.index(cid)]
+    return 'dropped' if shield.decide({'chunk_id': cid, 'text': text})['action'] == 'drop' else 'outranked'
+
+
+def outcome_counts(outcomes, n):
+    counts = {o: sum(x == o for x in outcomes) for o in OUTCOMES}
+    counts['suppressed'] = counts['dropped'] + counts['outranked']
+    counts['silent_attack_success_rate'] = round(counts['served_silently'] / max(1, n), 4)
+    return counts
+
+
 def make_shield(embedder, injection, policy=None, target_fpr=0.02):
     return Shield(Ledger(), Signer.generate(), embedder, VectorIndex(), injection=injection,
                   outlier=OutlierDetector(target_fpr=target_fpr), policy=policy or Policy())

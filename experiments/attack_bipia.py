@@ -18,7 +18,7 @@ import time
 
 import numpy as np
 
-from common import HERE, H, CachedEmbedder, CachedInjection, add_eval_args, eval_doc_ids, make_shield, out_path, vandelay
+from common import HERE, H, CachedEmbedder, CachedInjection, add_eval_args, eval_doc_ids, make_shield, out_path, outcome, outcome_counts, vandelay
 from ragshield import chunking
 from ragshield.shield import Policy
 
@@ -113,21 +113,20 @@ for name, source, tier in [('T2_low_trust_source', 'external-upload', 'low'), ('
         cid = payload_chunk(shield, p)
         record, quarantined, _ = shield.ledger.get(cid)
         raw_ids = [h['chunk_id'] for h in shield.retrieve(p['probe'], args.k, shielded=False)]
-        outcome = {}
+        outcome_by_w = {}
         for w in WEIGHTS:
             shield.policy.warn_weight = w
             hits = {h['chunk_id']: h for h in shield.retrieve(p['probe'], args.k)}
-            outcome[str(w)] = 'suppressed' if cid not in hits else ('served_silently' if hits[cid]['trust']['action'] == 'pass' else 'served_with_warning')
+            outcome_by_w[str(w)] = outcome(shield, cid, hits)
         rows.append({'id': p['id'], 'category': p['category'], 'split': p['split'], 'where': p['where'], 'chunk': cid,
                      'injection': record.scores['injection'], 'outlier_flag': record.scores['outlier_flag'],
-                     'quarantined': quarantined, 'retrieved_unshielded': cid in raw_ids, 'outcome': outcome})
+                     'quarantined': quarantined, 'retrieved_unshielded': cid in raw_ids, 'outcome': outcome_by_w})
     inj = np.array([r['injection'] for r in rows])
     outl = np.array([r['outlier_flag'] for r in rows])
     retrieved = [r for r in rows if r['retrieved_unshielded']]
     summary = {'retrieved_unshielded': len(retrieved), 'outcomes_when_retrieved': {}}
     for w in WEIGHTS:
-        counts = {o: sum(r['outcome'][str(w)] == o for r in retrieved) for o in ('served_silently', 'served_with_warning', 'suppressed')}
-        summary['outcomes_when_retrieved'][str(w)] = {**counts, 'silent_attack_success_rate': round(counts['served_silently'] / max(1, len(retrieved)), 4)}
+        summary['outcomes_when_retrieved'][str(w)] = outcome_counts([r['outcome'][str(w)] for r in retrieved], len(retrieved))
     shield.policy.warn_weight = 0.85
     summary['clean_recall_with_poison_present'] = round(float(H.eval_retrieval(
         f'bipia-{name}', {'shield': 'on', 'warn_weight': 0.85}, lambda q, k: shield.retrieve(q, k), k=args.k,
@@ -153,7 +152,7 @@ for n, attack in enumerate(attacks):
     t2b.ingest(pid, '\n\n'.join(paras[:at] + [attack['text']] + paras[at:]), 'external-upload', 'low')
     t2b_rows.append({'id': pid, 'payload': attack['text'], 'probe': ' '.join(re.sub(r'[#|`*>_-]+', ' ', host).split()[:25])})
 t2b.fit_outlier(fit_ids=trusted_ids)
-t2b_retrieved, t2b_outcomes = 0, {'served_silently': 0, 'served_with_warning': 0, 'suppressed': 0}
+t2b_retrieved, t2b_outcomes = 0, []
 t2b.policy.warn_weight = 0.85
 for row in t2b_rows:
     cid = payload_chunk(t2b, row)
@@ -161,10 +160,10 @@ for row in t2b_rows:
         continue
     t2b_retrieved += 1
     hits = {h['chunk_id']: h for h in t2b.retrieve(row['probe'], args.k)}
-    t2b_outcomes['suppressed' if cid not in hits else ('served_silently' if hits[cid]['trust']['action'] == 'pass' else 'served_with_warning')] += 1
+    t2b_outcomes.append(outcome(t2b, cid, hits))
 results['T2b_low_trust_no_trusted_counterpart'] = {
-    'held_out_docs': sorted(held), 'retrieved_unshielded': t2b_retrieved, 'outcomes_when_retrieved_warn_weight_0.85': t2b_outcomes,
-    'silent_attack_success_rate': round(t2b_outcomes['served_silently'] / max(1, t2b_retrieved), 4)}
+    'held_out_docs': sorted(held), 'retrieved_unshielded': t2b_retrieved,
+    'outcomes_when_retrieved_warn_weight_0.85': outcome_counts(t2b_outcomes, t2b_retrieved)}
 
 t3 = scenarios['T3_trusted_source']['rows']  # same texts in both scenarios, so detector scores are identical
 inj = np.array([r['injection'] for r in t3])
