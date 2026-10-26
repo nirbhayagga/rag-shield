@@ -74,6 +74,7 @@ export async function onRequestPost({ request, env, waitUntil }) {
   } catch {
     return json({ error: 'Invalid JSON.' }, 400);
   }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Expected a JSON object.' }, 400);
   if (body.website) return json({ ok: true }); // honeypot: bots fill hidden fields; pretend success, store nothing
 
   const ip = request.headers.get('CF-Connecting-IP') || '';
