@@ -49,7 +49,7 @@ cd rag-shield
 python3.12 -m venv .venv
 .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m unittest discover -s tests        # 15 tests, no model downloads
+.venv/bin/python -m unittest discover -s tests        # 20 tests, no model downloads
 cd experiments
 ../.venv/bin/python clean_baseline.py                # exp 1: cost on clean data
 ../.venv/bin/python attack_bipia.py                  # exp 2: T1/T2/T2b/T3 with BIPIA test attacks
@@ -57,6 +57,18 @@ cd experiments
 ```
 
 Model calls are cached in `results/cache/` by model and text hash, so reruns and policy sweeps are fast.
+
+### Scan your own corpus (index exposure report)
+
+```bash
+.venv/bin/python -m ragshield.report /path/to/docs --out report.md        # add --device cuda on a GPU
+```
+
+Ingests every text-like file as a trusted source, signs the chunks, scores them with the injection classifier and the
+outlier model, and writes a Markdown report: how many chunks would be served with a warning or sent to review, the top
+chunks to look at, and what share of the index raises no flag. Read-only and local; nothing leaves the machine. On the
+class corpus (36 files, 261 chunks) it takes about 6 minutes on CPU and flags 7% of chunks, most of them security logs
+and incident reports that generic classifiers misread, which is exactly what the review queue is for.
 
 ## Run on the RTX 4080 (or 2080)
 
