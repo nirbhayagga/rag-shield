@@ -24,9 +24,12 @@ Unverifiable chunks are always dropped.
 | `data/vandelay/` | Private corpus and questions | private |
 | `vendor/eval_harness.py` | Evaluation harness | private |
 | `data/external/bipia/` | Microsoft BIPIA attack files, train and test splits | MIT (LICENSE included) |
+| `data/external/poisonedrag/nq.json` | PoisonedRAG (Zou et al.) published adversarial texts for 100 NQ questions, unchanged | MIT (LICENSE included) |
+| `data/vandelay/poison_targets.json` | Our PoisonedRAG-style wrong answers for the class questions (names corpus entities, so it stays with the corpus) | — |
 | `data/splits.json` | Document-level train/test split of Vandelay, created by the fine-tune script and reused by every experiment that uses a tuned model | — |
 
-No new attack content is written anywhere. Published attacks are inserted unchanged.
+Published attacks are inserted unchanged. The one exception is experiment 4's targeted set: 26 false statements about the
+fictional Vandelay corpus, one per class question, written in the PoisonedRAG style (question followed by the false claim).
 
 ### Private corpus (not in git)
 
@@ -54,6 +57,7 @@ cd experiments
 ../.venv/bin/python clean_baseline.py                # exp 1: cost on clean data
 ../.venv/bin/python attack_bipia.py                  # exp 2: T1/T2/T2b/T3 with BIPIA test attacks
 ../.venv/bin/python delta_edits.py                   # exp 3: delta scoring vs benign edits
+../.venv/bin/python poisonedrag.py                   # exp 4: knowledge corruption, retrieval level (no generator)
 ```
 
 Model calls are cached in `results/cache/` by model and text hash, so reruns and policy sweeps are fast.
@@ -101,6 +105,20 @@ The fine-tune saw the 25 training documents, so the pipeline experiments must us
 ../.venv/bin/python attack_bipia.py --split test     # base classifier on the same documents, for comparison
 ../.venv/bin/python delta_edits.py  --split test
 ```
+
+### Answer-level PoisonedRAG (experiment 4)
+
+```bash
+../.venv/bin/python poisonedrag.py --generator Qwen/Qwen3-4B --device cuda                                   # base classifier, all docs
+../.venv/bin/python poisonedrag.py --generator Qwen/Qwen3-4B --device cuda --injection-model ../models/ragshield-injection-v1 --split test
+```
+
+Plants 5 poisoned texts per target question (the authors' 50 published NQ texts, unchanged, plus our 26 targeted false
+statements about the class corpus) as low-trust uploads, as new trusted pages, and as edits to an existing trusted page,
+then has a local model answer from the top-5 context. Reports how often the wrong answer comes out, unshielded vs shielded,
+next to clean accuracy. About 500 generations; a few minutes on a 4080, and cached in `results/cache/` for reruns.
+PoisonedRAG texts carry no instructions, so this is the experiment that shows what the trust tiers, outlier model and delta
+scoring catch without the classifier, and where an on-topic lie from a trusted editor still gets through.
 
 These write `results/<experiment>-<model>-<split>.json` (`base` for the off-the-shelf classifier). The shipped model is
 `ragshield-injection-v1` (trained with deepset): the `-nodeepset` variant scores slightly better on the Vandelay held-out
