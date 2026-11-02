@@ -5,7 +5,7 @@ wrong answer. The texts contain no instructions, so an injection classifier is n
 measures what the other layers do, and reports the honest gaps. Two attack sets:
   nq        the authors' published texts (results/adv_targeted_results/nq.json, MIT): 5 texts per question, unchanged,
             with the Vandelay corpus as the clean background
-  vandelay  PoisonedRAG-style texts for the class questions, built from data/vandelay/poison_targets.json: the question
+  vandelay  PoisonedRAG-style texts for the Vandelay questions, built from data/vandelay/poison_targets.json: the question
             followed by a false statement (5 phrasings), so the poison is on-topic for the page it lands in
 Threats (T1, direct store writes, is identical to experiment 2 and not repeated):
   T2  the texts arrive as low-trust uploads
@@ -13,7 +13,7 @@ Threats (T1, direct store writes, is identical to experiment 2 and not repeated)
   T3e the texts are appended to an existing trusted page as a new version (delta scoring applies)
 Retrieval level: how many poisoned chunks reach the top k, unshielded vs shielded, and what the shield did with them.
 Answer level (--generator <HF id>): a local model answers from the top-k context; attack success = the wrong answer
-appears in the output; accuracy = the class harness's fact scoring (vandelay) or the correct answer appearing (nq).
+appears in the output; accuracy = the evaluation harness's fact scoring (vandelay) or the correct answer appearing (nq).
 Writes results/poisonedrag.json (or the model/split-specific name). Generations are cached in results/cache/.
 Usage: python poisonedrag.py [--generator Qwen/Qwen3-4B --device cuda] [--nq 50] [--limit 5] [--injection-model ...]"""
 import argparse

@@ -185,7 +185,7 @@ PRIVATE_CORPUS = (HERE / 'vendor/eval_harness.py').exists() and (HERE / 'data/va
 
 class ChunkerAndOutlierTests(unittest.TestCase):
     @unittest.skipUnless(PRIVATE_CORPUS, 'private evaluation harness and corpus not present')
-    def test_chunker_passes_class_contract(self):
+    def test_chunker_passes_harness_contract(self):
         import eval_harness as H
         H.CORPUS_DIR = HERE / 'data/vandelay/corpus'
         with redirect_stdout(io.StringIO()) as out:

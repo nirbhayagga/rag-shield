@@ -1,14 +1,14 @@
-"""Experiment 6: does RAG Shield hold up on public text unlike the class corpus?
+"""Experiment 6: does RAG Shield hold up on public text unlike the Vandelay corpus?
 
 Corpora (fetch first with fetch_corpus.py; neither was used to build, train or tune anything):
   k8s     Kubernetes task docs (CC BY 4.0): a runbook-style wiki full of shell commands and imperative steps
   attack  MITRE ATT&CK Enterprise technique pages: security text that describes attacker behavior
-Same detectors and shipped policy as on the class corpus:
+Same detectors and shipped policy as on the Vandelay corpus:
   1. False alarms on clean chunks: injection score >= 0.5 (served with a warning) and >= 0.9, outlier on held-out folds,
      hidden characters, and the share of chunks that would carry any warning (the review workload).
   2. BIPIA test attacks (MIT, unchanged) placed in clean chunks, scored as whole chunks (as in experiment 2).
   3. Delta scoring on page edits: BIPIA attacks vs benign edits that add text from another page of the same section
-     (as in experiment 3), at the shipped thresholds (does the class-corpus calibration transfer?) and recalibrated on
+     (as in experiment 3), at the shipped thresholds (does the Vandelay calibration transfer?) and recalibrated on
      half of this corpus's benign edits, reported on the other half.
 On a CPU, --max-chunks keeps a seeded sample of whole pages (default 400 chunks); --max-chunks 0 uses everything.
 Writes results/public_corpus-<corpus>-<model>.json."""
@@ -16,17 +16,16 @@ import argparse
 import json
 import random
 import time
-from dataclasses import dataclass
 
 import numpy as np
 
-from common import HERE, CachedEmbedder, CachedInjection, make_shield, model_tag
+from common import HERE, PUBLIC_CORPORA, CachedEmbedder, CachedInjection, load_public, make_shield, model_tag
 from ragshield import chunking, delta, hidden
 from ragshield.detectors import INJECTION_MODEL
 from ragshield.shield import Policy
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument('--corpus', choices=['k8s', 'attack'], required=True)
+parser.add_argument('--corpus', choices=PUBLIC_CORPORA, required=True)
 parser.add_argument('--max-chunks', type=int, default=400)
 parser.add_argument('--seed', type=int, default=29)
 parser.add_argument('--device', default=None)
@@ -36,30 +35,9 @@ parser.add_argument('--limit', type=int, default=None, help='use only the first 
 args = parser.parse_args()
 
 
-@dataclass
-class Doc:
-    doc_id: str
-    title: str
-    doc_type: str
-    text: str
-
-    def metadata(self):
-        return {'doc_id': self.doc_id, 'title': self.title, 'type': self.doc_type}
-
-
-path = HERE / f'data/external/{args.corpus}/docs.jsonl'
-if not path.exists():
-    raise SystemExit(f'{path} missing: run python fetch_corpus.py {args.corpus} first')
 rng = random.Random(args.seed)
-everything = [Doc(**json.loads(line)) for line in path.read_text().splitlines()]
-rng.shuffle(everything)
-docs, n_chunks = [], 0
-for d in everything:
-    n = len(chunking.chunk(d.text))
-    if args.max_chunks and n_chunks + n > args.max_chunks:
-        continue
-    docs.append(d)
-    n_chunks += n
+docs, available = load_public(args.corpus, args.max_chunks, args.seed)
+rng.shuffle([None] * available)  # same random stream as when this script shuffled the pages itself, so results reproduce
 by_id = {d.doc_id: d for d in docs}
 embedder, injection = CachedEmbedder(device=args.device), CachedInjection(args.injection_model, device=args.device)
 attacks = []
@@ -82,7 +60,7 @@ warned = (inj >= 0.5) | held | hid
 worst = np.argsort(-inj)[:5]
 results = {
     'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'corpus': args.corpus, 'seed': args.seed,
-    'injection_model': args.injection_model, 'documents': len(docs), 'documents_available': len(everything),
+    'injection_model': args.injection_model, 'documents': len(docs), 'documents_available': available,
     'chunks': len(records),
     'clean_false_alarms': {'injection_ge_0.5': round(float((inj >= 0.5).mean()), 4), 'injection_ge_0.9': round(float((inj >= 0.9).mean()), 4),
                            'outlier_heldout': round(float(held.mean()), 4), 'hidden_chars': round(float(hid.mean()), 4),

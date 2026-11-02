@@ -3,7 +3,7 @@
 The adapter boundary is deliberately small (add / search / get / set_text) so ChromaDB and pgvector adapters can follow."""
 import numpy as np
 
-DEFAULT_MODEL = 'BAAI/bge-base-en-v1.5'  # the model the class harness serves for embeddings
+DEFAULT_MODEL = 'BAAI/bge-base-en-v1.5'  # strong English retrieval at 110M parameters, runs on CPU
 QUERY_PREFIX = 'Represent this sentence for searching relevant passages: '
 
 

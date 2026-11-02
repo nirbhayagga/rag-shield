@@ -1,6 +1,6 @@
 """Experiment 1: what does RAG Shield cost on clean data?
 
-On the class Vandelay corpus (no attack content), with the class harness's own retrieval metric:
+On the Vandelay corpus (no attack content), with the evaluation harness's own retrieval metric:
   - recall@5 and MRR, unshielded vs shielded (the filter must not hurt honest retrieval)
   - false-positive rate of each detector on clean chunks (outlier rate from held-out folds)
   - added latency per query, and ingestion cost per chunk

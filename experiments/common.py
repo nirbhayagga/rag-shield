@@ -1,6 +1,11 @@
-"""Shared setup for experiments: the class corpus and harness, and disk-cached model calls (keyed by model + text hash)."""
+"""Shared setup for experiments: corpora, the private evaluation harness (optional), and disk-cached model calls (keyed by model + text hash).
+
+The Vandelay corpus and its evaluation harness are private and not distributed. Experiments 1-4 need them; the
+exposure report and experiments 5 and 6 run on public corpora (fetch_corpus.py) without them."""
 import json
+import random
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -8,19 +13,59 @@ import numpy as np
 HERE = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(HERE), str(HERE / 'vendor')]
 
-import eval_harness as H  # noqa: E402  (private, not distributed)
+try:
+    import eval_harness as H  # noqa: E402  (private, not distributed: see the README)
+except ImportError:
+    H = None
 from ragshield.detectors import INJECTION_MODEL, OutlierDetector  # noqa: E402
 from ragshield.index import DEFAULT_MODEL, VectorIndex  # noqa: E402
 from ragshield.provenance import Ledger, Signer, sha256  # noqa: E402
 from ragshield.shield import Policy, Shield  # noqa: E402
 
-H.RESULTS_DIR = HERE / 'results'
-H.RESULTS_DIR.mkdir(exist_ok=True)  # gitignored, so missing in a fresh clone
+(HERE / 'results').mkdir(exist_ok=True)  # gitignored, so missing in a fresh clone
+if H is not None:
+    H.RESULTS_DIR = HERE / 'results'
 CACHE = HERE / 'results/cache'
 
 
 def vandelay():
+    if H is None or not (HERE / 'data/vandelay/corpus').is_dir():
+        raise SystemExit('This experiment needs the private Vandelay corpus and evaluation harness (not distributed): '
+                         'data/vandelay/ and vendor/eval_harness.py. The public-data experiments are hidden_chars.py and public_corpus.py.')
     return H.load_corpus(HERE / 'data/vandelay/corpus'), H.load_questions(HERE / 'data/vandelay/questions.yaml')
+
+
+PUBLIC_CORPORA = ('k8s', 'attack')
+
+
+@dataclass
+class Doc:
+    """A document from a public corpus, with the fields the experiments use from Vandelay documents."""
+    doc_id: str
+    title: str
+    doc_type: str
+    text: str
+
+    def metadata(self):
+        return {'doc_id': self.doc_id, 'title': self.title, 'type': self.doc_type}
+
+
+def load_public(name, max_chunks=400, seed=29):
+    """Whole pages from a fetched public corpus, in a seeded random order, until max_chunks chunks (0 = everything)."""
+    from ragshield import chunking
+    path = HERE / f'data/external/{name}/docs.jsonl'
+    if not path.exists():
+        raise SystemExit(f'{path} missing: run python fetch_corpus.py {name} first')
+    everything = [Doc(**json.loads(line)) for line in path.read_text().splitlines()]
+    random.Random(seed).shuffle(everything)
+    docs, total = [], 0
+    for d in everything:
+        n = len(chunking.chunk(d.text))
+        if max_chunks and total + n > max_chunks:
+            continue
+        docs.append(d)
+        total += n
+    return docs, len(everything)
 
 
 def add_eval_args(parser):

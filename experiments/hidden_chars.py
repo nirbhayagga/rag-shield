@@ -10,7 +10,10 @@ clean Vandelay chunk (as in experiment 2) and also scored on its own:
 For each: the classifier on the stored text (a shield without the check), the classifier on the cleaned text (what RAG
 Shield scores now), whether the check flags it, and caught = cleaned score >= 0.5 or flagged.
 False alarms of the check: every clean Vandelay chunk, deepset's benign prompts (several languages, Apache-2.0) and
-BIPIA's plain attacks (some use emoji). Writes results/hidden_chars.json (or the model/split-specific name)."""
+BIPIA's plain attacks (some use emoji).
+Host chunks come from a public corpus (--corpus k8s or attack, fetched by fetch_corpus.py; the default, so anyone can run
+it) or from the private Vandelay corpus (--corpus vandelay, with --split test for a classifier fine-tuned on it).
+Writes results/hidden_chars-<corpus>-<model>.json, or results/hidden_chars.json for Vandelay."""
 import argparse
 import json
 import random
@@ -18,12 +21,14 @@ import time
 
 import numpy as np
 
-from common import HERE, CachedInjection, add_eval_args, eval_doc_ids, out_path, vandelay
+from common import HERE, PUBLIC_CORPORA, CachedInjection, add_eval_args, eval_doc_ids, load_public, model_tag, out_path, vandelay
 from ragshield import chunking, hidden
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument('--device', default=None)
 parser.add_argument('--seed', type=int, default=23)
+parser.add_argument('--corpus', choices=('vandelay',) + PUBLIC_CORPORA, default='k8s', help='where the host chunks come from')
+parser.add_argument('--max-chunks', type=int, default=400, help='public corpora: sample size in chunks (0 = all)')
 add_eval_args(parser)
 args = parser.parse_args()
 
@@ -54,8 +59,12 @@ def tags(t):
 DISGUISES = {'plain': lambda t: t, 'zero-width': zero_width, 'joiner': joiner, 'look-alike': lookalike,
              'fullwidth': fullwidth, 'tags': tags}
 
-docs, _ = vandelay()
-eligible = eval_doc_ids(docs, args.split)
+if args.corpus == 'vandelay':
+    docs, _ = vandelay()
+    eligible = eval_doc_ids(docs, args.split)
+else:
+    docs, _ = load_public(args.corpus, args.max_chunks)
+    eligible = {d.doc_id for d in docs}  # nothing in a public corpus was used for training
 injection = CachedInjection(args.injection_model, device=args.device)
 attacks = []
 for split in ('text', 'code'):
@@ -70,7 +79,7 @@ for _ in attacks:
     placements.append((paras, rng.choice([0, len(paras) // 2, len(paras)])))
 
 t0 = time.time()
-results = {'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'seed': args.seed, 'attacks': len(attacks),
+results = {'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'corpus': args.corpus, 'seed': args.seed, 'attacks': len(attacks),
            'injection_model': args.injection_model, 'split': args.split, 'eval_docs': len(eligible), 'disguises': {}}
 for name, disguise in DISGUISES.items():
     payloads = [disguise(a['text']) for a in attacks]
@@ -98,8 +107,8 @@ for name, disguise in DISGUISES.items():
     print(name, json.dumps(entry))
 
 # False alarms of the check itself.
-vandelay_flags = [hidden.total(hidden.inspect(c)[1]) > 0 for c in clean_chunks]
-fa = {'vandelay_clean_chunks': {'n': len(clean_chunks), 'flagged': int(sum(vandelay_flags))},
+host_flags = [hidden.total(hidden.inspect(c)[1]) > 0 for c in clean_chunks]
+fa = {f'{args.corpus}_clean_chunks': {'n': len(clean_chunks), 'flagged': int(sum(host_flags))},
       'bipia_plain_attacks': {'n': len(attacks), 'flagged': int(sum(hidden.total(hidden.inspect(a['text'])[1]) > 0 for a in attacks))}}
 try:
     import pandas as pd
@@ -117,7 +126,7 @@ except Exception as e:  # offline and not cached: report the rest
     fa['deepset_benign'] = {'error': str(e)[:200]}
 results['false_alarms_of_check'] = fa
 results['runtime_sec'] = round(time.time() - t0, 1)
-out = out_path('hidden_chars', args)
+out = out_path('hidden_chars', args) if args.corpus == 'vandelay' else HERE / f'results/hidden_chars-{args.corpus}-{model_tag(args.injection_model)}.json'
 out.write_text(json.dumps(results, indent=2))
 print(json.dumps(fa, indent=2))
 print('wrote', out)

@@ -1,4 +1,4 @@
-"""Paragraph-aware chunker that meets the eval_harness check_chunker contract: fn(text, chunk_size, overlap) -> list[str]."""
+"""Paragraph-aware chunker that meets the evaluation harness's check_chunker contract: fn(text, chunk_size, overlap) -> list[str]."""
 import re
 
 
