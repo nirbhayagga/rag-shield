@@ -28,6 +28,7 @@ Unverifiable chunks are always dropped.
 | `data/external/bipia/` | Microsoft BIPIA attack files, train and test splits | MIT (LICENSE included) |
 | `data/external/poisonedrag/nq.json` | PoisonedRAG (Zou et al.) published adversarial texts for 100 NQ questions, unchanged | MIT (LICENSE included) |
 | `data/vandelay/poison_targets.json` | Our PoisonedRAG-style wrong answers for the class questions (names corpus entities, so it stays with the corpus) | — |
+| `data/external/k8s/`, `data/external/attack/` | Kubernetes task docs (CC BY 4.0) and MITRE ATT&CK Enterprise 20.0 technique pages (MITRE ATT&CK license), fetched at pinned versions by `experiments/fetch_corpus.py`; gitignored, `SOURCE.md` records attribution | see `SOURCE.md` |
 | `data/splits.json` | Document-level train/test split of Vandelay, created by the fine-tune script and reused by every experiment that uses a tuned model | — |
 
 Published attacks are inserted unchanged. The one exception is experiment 4's targeted set: 26 false statements about the
@@ -61,6 +62,9 @@ cd experiments
 ../.venv/bin/python delta_edits.py                   # exp 3: delta scoring vs benign edits
 ../.venv/bin/python poisonedrag.py                   # exp 4: knowledge corruption, retrieval level (no generator)
 ../.venv/bin/python hidden_chars.py                  # exp 5: zero-width, tag and look-alike disguises
+../.venv/bin/python fetch_corpus.py all              # public corpora for exp 6 (about 2 minutes)
+../.venv/bin/python public_corpus.py --corpus attack # exp 6: false alarms, detection and delta scoring on public text
+../.venv/bin/python public_corpus.py --corpus k8s    #   (a 400-chunk sample on CPU; --max-chunks 0 for everything)
 ```
 
 Model calls are cached in `results/cache/` by model and text hash, so reruns and policy sweeps are fast.
@@ -122,6 +126,21 @@ then has a local model answer from the top-5 context. Reports how often the wron
 next to clean accuracy. About 500 generations; a few minutes on a 4080, and cached in `results/cache/` for reruns.
 PoisonedRAG texts carry no instructions, so this is the experiment that shows what the trust tiers, outlier model and delta
 scoring catch without the classifier, and where an on-topic lie from a trusted editor still gets through.
+
+### The fine-tuned classifier on public text (experiments 5 and 6)
+
+```bash
+../.venv/bin/python hidden_chars.py --device cuda --injection-model ../models/ragshield-injection-v1 --split test
+../.venv/bin/python fetch_corpus.py all
+for c in attack k8s; do
+  ../.venv/bin/python public_corpus.py --corpus $c --max-chunks 0 --device cuda
+  ../.venv/bin/python public_corpus.py --corpus $c --max-chunks 0 --device cuda --injection-model ../models/ragshield-injection-v1
+done
+```
+
+The fine-tune never saw either public corpus, so all of it counts as held out. This is the test of whether 98% on the class
+corpus's held-out documents carries over to text written by other people, and what the false-alarm rate is on real runbooks
+and security writing.
 
 These write `results/<experiment>-<model>-<split>.json` (`base` for the off-the-shelf classifier). The shipped model is
 `ragshield-injection-v1` (trained with deepset): the `-nodeepset` variant scores slightly better on the Vandelay held-out

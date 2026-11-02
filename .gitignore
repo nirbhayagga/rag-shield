@@ -13,3 +13,7 @@ vendor/results/
 
 # Experiment outputs quote corpus text (probes, benign edits), so they stay local. Regenerate with experiments/*.py.
 results/
+
+# Public corpora for experiment 6: fetched at pinned versions by experiments/fetch_corpus.py
+data/external/k8s/
+data/external/attack/
