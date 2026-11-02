@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rag-shield"
+dynamic = ["version"]
+description = "Signed provenance, poisoning detection and a retrieval-time trust filter for RAG pipelines"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Nirbhay Aggarwal" }]
+keywords = ["rag", "retrieval-augmented generation", "prompt injection", "data poisoning", "provenance", "llm security"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "numpy>=2",
+  "scikit-learn>=1.5",
+  "cryptography>=43",
+  "torch>=2.5",
+  "transformers>=4.45",
+  "sentence-transformers>=3",
+]
+
+[project.optional-dependencies]
+# Only the benchmark scripts in experiments/ need these.
+experiments = [
+  "pandas>=2",
+  "pyyaml>=6",
+  "requests>=2.32",
+  "huggingface_hub>=0.25",
+  "pyarrow>=15",
+]
+
+[project.scripts]
+ragshield-report = "ragshield.report:main"
+
+[project.urls]
+Homepage = "https://ragshield.dev"
+Source = "https://github.com/nirbhayagga/rag-shield"
+
+[tool.setuptools.dynamic]
+version = { attr = "ragshield.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["ragshield*"]
