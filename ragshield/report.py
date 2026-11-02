@@ -14,6 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import hidden
+
 TEXT_SUFFIXES = {'.md', '.txt', '.rst', '.markdown', '.log', '.csv', '.json', '.yaml', '.yml', '.html', '.htm'}
 
 
@@ -57,15 +59,17 @@ def scan(shield, files, root=None, source_id='local-files', trust_tier='high'):
             reasons.append(f'possible instructions to the model ({inj:.2f})')
         if record.scores.get('outlier_flag'):
             reasons.append(f"unlike the rest of the corpus (outlier {record.scores['outlier']:.2f})")
+        if record.scores.get('hidden'):
+            reasons.append(hidden.describe(record.scores['hidden']))
         chunks.append({'chunk_id': cid, 'doc_id': record.doc_id, 'injection': round(float(inj), 4),
                        'outlier': record.scores.get('outlier'), 'outlier_flag': bool(record.scores.get('outlier_flag')),
-                       'reasons': reasons, 'snippet': text[:160].replace('\n', ' ')})
+                       'hidden': record.scores.get('hidden', {}), 'reasons': reasons, 'snippet': text[:160].replace('\n', ' ')})
     inj_scores = np.array([c['injection'] for c in chunks]) if chunks else np.zeros(0)
     summary = {
         'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'seconds': round(time.time() - t0, 1),
         'documents': len(docs), 'chunks': n_chunks, 'signed': n_chunks,
         'injection_block': int((inj_scores >= p.injection_block).sum()), 'injection_warn': int((inj_scores >= p.injection_warn).sum()),
-        'outlier_flags': int(outlier_flags), 'flagged': sum(1 for c in chunks if c['reasons']),
+        'outlier_flags': int(outlier_flags), 'hidden': sum(1 for c in chunks if c['hidden']), 'flagged': sum(1 for c in chunks if c['reasons']),
         'policy': {'injection_warn': p.injection_warn, 'injection_block': p.injection_block,
                    'outlier_target_fpr': getattr(shield.outlier, 'target_fpr', None)},
     }
@@ -82,6 +86,7 @@ def render(summary, chunks, top=10):
              f"| Instructions to the model (score ≥ {s['policy']['injection_block']}) | {s['injection_block']} chunks | Trusted source: served with a warning and sent to review. Low-trust source: quarantined |",
              f"| Possible instructions (score ≥ {s['policy']['injection_warn']}) | {s['injection_warn']} chunks | Served with a warning label and reduced rank |",
              f"| Unlike the rest of the corpus (outlier) | {s['outlier_flags']} chunks (target false-positive rate {s['policy']['outlier_target_fpr']}) | Served with a warning; shown first in the review queue |",
+             f"| Hidden or look-alike characters | {s['hidden']} chunks | Trusted source: served with a warning and sent to review. Low-trust source: dropped |",
              f"| **Clean** | **{s['clean_pct']}%** of chunks raise no flag | |", '']
     flagged = sorted((c for c in chunks if c['reasons']), key=lambda c: (-c['injection'], -(c['outlier'] or 0)))
     if flagged:

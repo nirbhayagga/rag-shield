@@ -8,12 +8,14 @@ Signed provenance, poisoning detection and a retrieval-time trust filter for RAG
 |---|---|---|
 | Ingestion signer | `ragshield/provenance.py` | SHA-256 + Ed25519 signature per chunk, SQLite ledger, key revocation, document versions |
 | Delta scoring | `ragshield/delta.py`, `shield.py` | On re-ingestion, isolates new paragraphs (or new sentences in modified paragraphs) and scores only those |
+| Hidden characters | `ragshield/hidden.py` | Finds invisible, tag, direction-control and look-alike characters; the classifier scores the cleaned text and the finding is its own reason. Ordinary multilingual text and emoji are left alone |
 | Detectors | `ragshield/detectors.py` | Injection classifier (ProtectAI DeBERTa-v3, or the fine-tuned one) and an embedding-outlier model (LOF over bge-base) |
 | Trust filter | `ragshield/shield.py` | Verifies each retrieved chunk, drops tampered/unknown/quarantined chunks, warns and queues suspicious trusted content, re-ranks by similarity × trust; `lockdown` kill switch |
 | Index | `ragshield/index.py` | Minimal cosine index with the adapter surface for ChromaDB/pgvector |
 
 The policy is deliberately asymmetric. Trusted, signed sources are never deleted on a classifier score alone (warn + review).
-Low and medium-trust sources are dropped on a high injection score or a flagged edit (off-topic or injection-like additions),
+Low and medium-trust sources are dropped on a high injection score, hidden characters, or a flagged edit (off-topic,
+injection-like or hidden-character additions),
 and low-trust chunks that also carry a warning are dropped when their ranking weight falls below `Policy.min_rank`.
 Unverifiable chunks are always dropped.
 
@@ -58,6 +60,7 @@ cd experiments
 ../.venv/bin/python attack_bipia.py                  # exp 2: T1/T2/T2b/T3 with BIPIA test attacks
 ../.venv/bin/python delta_edits.py                   # exp 3: delta scoring vs benign edits
 ../.venv/bin/python poisonedrag.py                   # exp 4: knowledge corruption, retrieval level (no generator)
+../.venv/bin/python hidden_chars.py                  # exp 5: zero-width, tag and look-alike disguises
 ```
 
 Model calls are cached in `results/cache/` by model and text hash, so reruns and policy sweeps are fast.
@@ -147,6 +150,8 @@ See `results/*.json`. The summary is kept in the proposal's §4 table.
   and hash, so anyone with ledger write access can lower a score. Signing verdicts (or keying quarantine to a reviewer) is
   November work.
 - Revoking a key drops every chunk it ever signed; re-signing on rotation is not implemented.
+- A trusted chunk with hidden characters is served as stored, with a warning. The shield labels it but does not rewrite it,
+  because the signature covers the original text; an application that wants the cleaned text can call `hidden.clean()`.
 - The ChromaDB and pgvector adapters, the review dashboard and Haiku reviewer summaries are November work.
 - Benign edits in experiment 3 are built from other Vandelay documents of the same type. That is likely *harder* (more
   off-topic) than real edits, so its false-alarm rate is a conservative estimate.

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from . import chunking, delta
+from . import chunking, delta, hidden
 from .provenance import TIERS, new_record
 
 
@@ -25,6 +25,7 @@ class Policy:
     delta_offtopic: float = 0.45    # 1 - max cosine to the previous version; calibrated on benign edits in experiment 3
     overfetch: int = 3              # fetch k * overfetch candidates before filtering
     lockdown: bool = False          # incident kill switch: serve only verified chunks with no warning at all
+    hidden_check: bool = True       # flag invisible, tag and look-alike characters (the classifier always scores cleaned text)
 
 
 class Shield:
@@ -47,13 +48,19 @@ class Shield:
             self.ledger.delete_doc_chunks(doc_id)
         self.ledger.add_version(doc_id, paragraphs)
         pieces = chunking.chunk(text, chunk_size, overlap)
+        inspected = [hidden.inspect(piece) for piece in pieces]  # (what a reader sees, what was hidden)
         vectors = self.embedder.passages(pieces)
-        injection = self.injection.score(pieces) if self.injection else np.zeros(len(pieces))
+        injection = self.injection.score([seen for seen, _ in inspected]) if self.injection else np.zeros(len(pieces))
         records = []
-        for i, (piece, vector, inj) in enumerate(zip(pieces, vectors, injection)):
+        for i, (piece, vector, inj, (_, hid)) in enumerate(zip(pieces, vectors, injection, inspected)):
             chunk_id = f'{doc_id}::{i}'
             record = self.signer.sign(new_record(chunk_id, doc_id, source_id, trust_tier, i, piece))
             record.scores = {'injection': round(float(inj), 4)}
+            if self.policy.hidden_check and hidden.total(hid):
+                record.scores['hidden'] = {k: n for k, n in hid.items() if n}
+                if trust_tier not in self.policy.block_tiers:
+                    record.scores['review'] = True
+                self._event(chunk_id, 'review', hidden.describe(hid) + ' at ingestion')
             mine = [a for a in additions if delta.contains(piece, a['text'])]
             if mine:
                 record.scores['delta'] = {'injection': max(a['injection'] for a in mine),
@@ -84,9 +91,12 @@ class Shield:
         new_vecs = self.embedder.passages(added)
         old_vecs = self.embedder.passages(previous)
         offtopic = 1 - (new_vecs @ old_vecs.T).max(axis=1)
-        inj = self.injection.score(added) if self.injection else np.zeros(len(added))
-        return [{'text': t, 'offtopic': round(float(o), 4), 'injection': round(float(s), 4),
-                 'flag': bool(s >= p.delta_injection or o >= p.delta_offtopic)} for t, o, s in zip(added, offtopic, inj)]
+        inspected = [hidden.inspect(t) for t in added]
+        inj = self.injection.score([seen for seen, _ in inspected]) if self.injection else np.zeros(len(added))
+        hid = [hidden.total(h) if p.hidden_check else 0 for _, h in inspected]
+        return [{'text': t, 'offtopic': round(float(o), 4), 'injection': round(float(s), 4), 'hidden': n,
+                 'flag': bool(s >= p.delta_injection or o >= p.delta_offtopic or n > 0)}
+                for t, o, s, n in zip(added, offtopic, inj, hid)]
 
     def fit_outlier(self, tiers=('high',), fit_ids=None):
         """Fit the outlier model on trusted chunks (or on a reviewed snapshot, fit_ids), then score every chunk."""
@@ -121,6 +131,10 @@ class Shield:
             reasons.append(f'possible instructions ({inj:.2f})')
         if record.scores.get('outlier_flag'):
             reasons.append('embedding outlier')
+        if record.scores.get('hidden'):
+            if blockable:
+                return {'action': 'drop', 'reason': hidden.describe(record.scores['hidden']), 'trust': 0.0}
+            reasons.append(hidden.describe(record.scores['hidden']))
         if record.scores.get('delta_flag'):
             d = record.scores['delta']
             if blockable:
