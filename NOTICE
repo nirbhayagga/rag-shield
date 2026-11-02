@@ -1,0 +1,10 @@
+RAG Shield
+Copyright 2026 Nirbhay Aggarwal
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This repository also includes third-party material under its own license:
+- data/external/bipia/: attack files from Microsoft's BIPIA benchmark (MIT License; see data/external/bipia/LICENSE)
+- data/external/poisonedrag/nq.json: PoisonedRAG adversarial texts, Copyright (c) 2024 Runpeng Geng
+  (MIT License; see data/external/poisonedrag/LICENSE)
+- site/public/fonts/: IBM Plex fonts (SIL Open Font License 1.1; see site/public/fonts/OFL.txt)
