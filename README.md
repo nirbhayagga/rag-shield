@@ -23,7 +23,9 @@ The policy is deliberately asymmetric:
 - Trusted, signed sources are never deleted on a classifier score alone. They get a warning and go to review.
 - Low and medium-trust sources are dropped on a high injection score, on hidden characters, or on a flagged edit
   (additions that are off-topic, injection-like or full of hidden characters).
-- Low-trust chunks that also carry a warning are dropped when their ranking weight falls below `Policy.min_rank`.
+- Low-trust chunks that the outlier model flags (unlike anything in the trusted corpus) are dropped. A warning label
+  alone isn't enough there: the model reads a labeled chunk anyway (see the PoisonedRAG results).
+- Other low-trust chunks that carry a warning are dropped when their ranking weight falls below `Policy.min_rank`.
 - Chunks that can't be verified are always dropped.
 
 ## Install
@@ -106,28 +108,34 @@ quote corpus text.
 
 ```bash
 cd experiments
-../.venv/bin/python fetch_corpus.py all                  # Kubernetes task docs + MITRE ATT&CK, pinned (about 2 minutes)
+../.venv/bin/python fetch_corpus.py all                  # Kubernetes, MITRE ATT&CK and Docker docs, pinned (a few minutes)
 ../.venv/bin/python hidden_chars.py --corpus k8s         # exp 5: zero-width, tag and look-alike disguises
 ../.venv/bin/python public_corpus.py --corpus attack     # exp 6: false alarms, detection and delta scoring on public text
 ../.venv/bin/python public_corpus.py --corpus k8s        #   (a 400-chunk sample on CPU; --max-chunks 0 for everything)
+../.venv/bin/python public_corpus.py --corpus docker
 ```
 
-**Public corpora** (experiment 6). These numbers use the off-the-shelf classifier on 400-chunk seeded samples.
-Neither corpus was used to build, train or tune anything.
+**Public corpora** (experiment 6). These runs use every page: 1,587 ATT&CK chunks and 2,711 Kubernetes chunks. The
+"fine-tuned v1" columns use the classifier fine-tuned on the private corpus (its weights aren't published), which never
+saw either corpus.
 
-| | MITRE ATT&CK techniques | Kubernetes task docs |
-|---|---|---|
-| Clean chunks scored as injection (≥ 0.5) | 4.0% | 0.5% |
-| Clean chunks carrying any warning (the review workload) | 5.8% | 2.5% |
-| BIPIA attack pasted into a chunk, caught on the whole chunk | 5.6% | 3.2% |
-| BIPIA attack added as a page edit, caught by delta scoring | 66.4% | 36.8% |
-| Benign page edits flagged | 7.2% | 7.2% |
-| Delta scoring recalibrated on this corpus (attacks / benign, held-out half) | 63.2% / 9.7% | 27.2% / 1.6% |
+| | ATT&CK: off-the-shelf | ATT&CK: fine-tuned v1 | Kubernetes: off-the-shelf | Kubernetes: fine-tuned v1 |
+|---|---|---|---|---|
+| Clean chunks scored as injection (≥ 0.5) | 2.7% | 0.2% | 1.3% | **50.9%** |
+| Clean chunks carrying any warning (the review workload) | 4.7% | 2.2% | 3.3% | 52.1% |
+| BIPIA attack pasted into a chunk, caught on the whole chunk | 13.6% | 90.4% | 4.0% | 98.4% (meaningless here) |
+| BIPIA attack added as a page edit, caught by delta scoring | 74.4% | 97.6% | 37.6% | 97.6% |
+| Benign page edits flagged | 12.0% | 9.6% | 4.8% | 25.6% |
 
-An attack paragraph inside a long page is rarely scored as injection when the whole chunk is classified; the rest of
-the page dilutes it. Scoring only what an edit added is what catches it. The off-the-shelf classifier separates
-attacks from benign edits poorly on these corpora (delta AUROC 0.57 and 0.62). That is the case for the fine-tuned
-classifier, whose public-corpus numbers will be added here.
+- **The off-the-shelf classifier** rarely scores an attack paragraph as injection when the whole chunk is classified;
+  the rest of the page dilutes it. Scoring only what an edit added (delta scoring) is what catches it.
+- **The fine-tuned v1 transfers to security writing.** On ATT&CK pages its false alarms almost disappear, and
+  whole-chunk detection goes from 14% to 90%.
+- **It doesn't transfer to how-to docs.** It scores half of all Kubernetes chunks as injection, mostly configuration
+  steps ("add the following to your `~/.bashrc`") and command output. It learned that imperative text in a document
+  is an attack. So its 98% on held-out documents holds for security writing, not for runbooks.
+- **v2** retrains with Kubernetes pages as negatives (`finetune_injection.py --public-negatives k8s`) and is tested on
+  Docker's docs, which it never sees. The off-the-shelf classifier stays the default.
 
 **Hidden characters** (experiment 5). Each BIPIA test attack is disguised and then placed inside a clean chunk. "Caught"
 means either the cleaned text scores ≥ 0.5 or the check flags the disguise.
@@ -151,6 +159,10 @@ The check raised no false alarms on any of these:
 The check catches the disguise, not the injection. A plain attack pasted into a long page is the classifier's job, and
 the off-the-shelf classifier mostly misses it (the first row).
 
+A better classifier doesn't make the check redundant. The fine-tuned v1 scores 84% of the plain attacks on their own
+as injection, but 0% of the same attacks written as tag characters. Cleaned by the check, they score 84% again, and the
+check flags all of them.
+
 ### Private corpus (experiments 1–4 and the fine-tune)
 
 These experiments use Vandelay, a fictional company's internal documents: 35 policies, runbooks, logs and incident
@@ -169,35 +181,53 @@ Results, briefly:
 
 - **Clean cost.** Recall@5 was unchanged (0.553 with and without the shield). MRR went from 0.753 to 0.733. The shield
   added 3 ms per query (p50, CPU).
-- **Delta scoring with the fine-tuned classifier**, on 10 held-out documents only: 98.4% of attack edits flagged, and
-  3.2% of benign edits.
-- **PoisonedRAG.**
-  - Low-trust poison was never served silently; it was outranked or labeled.
-  - On-topic false statements from a trusted editor were served silently 72% of the time as new pages (94 of 130
-    chunks), and 75% of the time as page edits (55 of 73).
-  - PoisonedRAG texts contain no instructions, so the classifier can't help there. The trust tier is the control.
+- **Delta scoring with the fine-tuned v1**, on 10 held-out documents only: 98.4% of attack edits flagged, and 3.2% of
+  benign edits. This carries over to public security writing, but not to how-to docs (see the public corpora above).
+- **PoisonedRAG.** PoisonedRAG texts contain no instructions, so the classifier can't help; the trust tier and the
+  outlier model are the controls. Qwen3-4B answered from the top 5 passages, and "attack success" means the planted
+  wrong answer appeared in its answer:
+
+  | Poison arrives as | No shield | Shield, earlier policy (outliers labeled) |
+  |---|---|---|
+  | Low-trust upload, on-topic (our 26 false statements) | 92% | 12% |
+  | Low-trust upload, off-topic (50 PoisonedRAG NQ targets) | 98% | 84% |
+  | Trusted new page (ours / NQ) | 92% / 98% | 92% / 98% |
+  | Trusted page edit (ours / NQ) | 88% / 98% | 77% / 98% |
+
+  - The off-topic poison was labeled as an outlier every time, and the model used it anyway. That is why the shipped
+    policy now drops low-trust outliers. At retrieval level it keeps that poison out of the top 5 in all 50 cases
+    (before: 43 of 50 still reached it). The answer-level rerun, and a run that shows the model the trust labels, are
+    in progress.
+  - On-topic false statements from a trusted editor get through: served silently 72% of the time as new pages (94 of
+    130 chunks) and 75% as page edits (55 of 73). Signing can't help when the editor is legitimate. That gap needs
+    review of edits by default, or checking claims against the rest of the corpus.
 
 GPU commands (an RTX 20xx has no fast bf16, so add `--precision fp16 --batch 8 --grad-accum 2` there):
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu128
 ../.venv/bin/python finetune_injection.py --device cuda --dry-run                     # smoke test
-../.venv/bin/python finetune_injection.py --device cuda --deepset                     # the shipped model; about a minute on an RTX 4080
-../.venv/bin/python attack_bipia.py --injection-model ../models/ragshield-injection-v1 --split test
-../.venv/bin/python delta_edits.py  --injection-model ../models/ragshield-injection-v1 --split test
+../.venv/bin/python finetune_injection.py --device cuda --deepset                     # v1; about a minute on an RTX 4080
+../.venv/bin/python finetune_injection.py --device cuda --deepset --public-negatives k8s --name ragshield-injection-v2
+../.venv/bin/python attack_bipia.py --injection-model ../models/ragshield-injection-v2 --split test
+../.venv/bin/python delta_edits.py  --injection-model ../models/ragshield-injection-v2 --split test
 ../.venv/bin/python poisonedrag.py --generator Qwen/Qwen3-4B --device cuda           # answer level, about 500 generations
-for c in attack k8s; do
-  ../.venv/bin/python public_corpus.py --corpus $c --max-chunks 0 --device cuda --injection-model ../models/ragshield-injection-v1
+../.venv/bin/python poisonedrag.py --generator Qwen/Qwen3-4B --device cuda --labels  # the model sees the trust labels
+for c in attack k8s docker; do
+  ../.venv/bin/python public_corpus.py --corpus $c --max-chunks 0 --device cuda --injection-model ../models/ragshield-injection-v2
 done
 ```
+
+`poisonedrag.py --policy warn-outliers` reruns the earlier policy for comparison.
 
 The fine-tune report compares the base and fine-tuned models on **held-out documents only**, using BIPIA **test**
 attacks in three styles (whole chunk, delta, inline). It reports AUROC, TPR at 1% and 5% FPR, and FPR at 0.5. It
 always reports deepset's test split too: as out-of-domain when deepset wasn't used for training, as in-domain when it
 was.
 
-The shipped model is trained with deepset. A variant trained without deepset scores slightly better on held-out
-Vandelay, but flags 62.5% of deepset's benign prompts. That variant has learned the corpus, not injection.
+v1 is trained with deepset. A variant trained without deepset scores slightly better on held-out Vandelay, but flags
+62.5% of deepset's benign prompts. That variant has learned the corpus, not injection; the Kubernetes result above
+shows v1 has the same problem with how-to text.
 
 ### Reading the numbers
 
@@ -217,7 +247,7 @@ Vandelay, but flags 62.5% of deepset's benign prompts. That variant has learned 
 |---|---|---|
 | `data/external/bipia/` | Microsoft BIPIA attack files, train and test splits | MIT (LICENSE included) |
 | `data/external/poisonedrag/nq.json` | PoisonedRAG (Zou et al.) published adversarial texts for 100 NQ questions, unchanged | MIT (LICENSE included) |
-| `data/external/k8s/`, `data/external/attack/` | Kubernetes task docs and MITRE ATT&CK Enterprise 20.0 technique pages. Fetched at pinned versions by `experiments/fetch_corpus.py` and not committed; each folder's `SOURCE.md` records its attribution | CC BY 4.0; MITRE ATT&CK license |
+| `data/external/k8s/`, `data/external/attack/`, `data/external/docker/` | Kubernetes task docs, MITRE ATT&CK Enterprise 20.0 technique pages and Docker's manuals. Fetched at pinned versions by `experiments/fetch_corpus.py` and not committed; each folder's `SOURCE.md` records its attribution | CC BY 4.0; MITRE ATT&CK license; Apache-2.0 |
 | `data/splits.json` | Document-level train/test split of the private corpus, reused by every experiment that uses a tuned model | — |
 | `data/vandelay/`, `vendor/` | Private corpus, questions and evaluation harness (not distributed) | — |
 
@@ -228,6 +258,9 @@ Vandelay, but flags 62.5% of deepset's benign prompts. That variant has learned 
   position and hash, so anyone with write access to the ledger can lower a score. Signing verdicts (or tying quarantine
   to a reviewer) is planned.
 - Revoking a key drops every chunk it ever signed. Re-signing on key rotation is not implemented.
+- Low-trust content on a topic the trusted corpus doesn't cover is dropped as an outlier, even when it's benign. It
+  stays in the ledger, and re-ingesting it at a higher tier after review serves it. To label such content instead of
+  dropping it, set `Policy.outlier_block_tiers = ()`.
 - A trusted chunk with hidden characters is served as stored, with a warning. The shield labels it but doesn't rewrite
   it, because the signature covers the original text. An application that wants the cleaned text can call
   `hidden.clean()`.
