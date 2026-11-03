@@ -137,6 +137,21 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(hits[1]['trust']['action'], 'warn')
         self.assertIn('low-trust source', hits[1]['trust']['reason'])
 
+    def test_outlier_from_low_trust_source_is_dropped_but_trusted_outlier_is_served_with_a_warning(self):
+        shield = make_shield()
+        shield.ingest('web-1', 'Who wrote the Odyssey? Homer wrote it on the moon.', 'upload', 'low')
+        shield.ingest('kb-1', 'Who wrote the Odyssey? The Odyssey is attributed to Homer.', 'wiki', 'high')
+        for cid in ('web-1::0', 'kb-1::0'):  # as fit_outlier() would mark them
+            record = shield.ledger.get(cid)[0]
+            record.scores['outlier_flag'] = True
+            shield.ledger.put(record)
+        hits = shield.retrieve('who wrote the Odyssey', 2)
+        self.assertEqual([h['doc_id'] for h in hits], ['kb-1'])
+        self.assertIn('embedding outlier', hits[0]['trust']['reason'])
+        self.assertIn(('web-1::0', 'drop', 'embedding outlier from a low-trust source'), [e[1:] for e in shield.events])
+        shield.policy.outlier_block_tiers = ()  # the earlier policy: label it and let ranking decide
+        self.assertEqual(len(shield.retrieve('who wrote the Odyssey', 2)), 2)
+
 
 class DeltaTests(unittest.TestCase):
     PAGE = ('VPN access runbook.\n\nContractors connect through the SEG-CORP gateway on 443/tcp.\n\n'

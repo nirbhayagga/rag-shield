@@ -26,6 +26,9 @@ class Policy:
     overfetch: int = 3              # fetch k * overfetch candidates before filtering
     lockdown: bool = False          # incident kill switch: serve only verified chunks with no warning at all
     hidden_check: bool = True       # flag invisible, tag and look-alike characters (the classifier always scores cleaned text)
+    # Low-trust content that looks unlike anything in the trusted corpus is dropped, not just labeled: in the PoisonedRAG
+    # experiment a warning label alone left 84% of off-topic poison answers intact, because the model reads the chunk anyway.
+    outlier_block_tiers: tuple = ('low',)
 
 
 class Shield:
@@ -130,6 +133,8 @@ class Shield:
         elif inj >= p.injection_warn:
             reasons.append(f'possible instructions ({inj:.2f})')
         if record.scores.get('outlier_flag'):
+            if tier in p.outlier_block_tiers:
+                return {'action': 'drop', 'reason': 'embedding outlier from a low-trust source', 'trust': 0.0}
             reasons.append('embedding outlier')
         if record.scores.get('hidden'):
             if blockable:
