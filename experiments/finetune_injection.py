@@ -9,6 +9,10 @@ Data (no new attack content is written; attacks are inserted unchanged):
              and appended to a sentence (inline style)
   negatives  Vandelay chunks, paragraphs and sentences
   optional   deepset/prompt-injections train split (Apache-2.0) with --deepset, to keep general coverage
+  optional   clean pages from public corpora with --public-negatives (e.g. k8s): how-to text full of commands and
+             imperative steps, which v1 (trained without it) flagged as injection on 51% of Kubernetes chunks. Training
+             attacks are also inserted into these pages, so "a command in a runbook" and "an attack in a runbook" both
+             appear. A corpus used here is in-domain afterwards: test on one that wasn't (docker for how-to text)
 Leakage controls:
   - Vandelay is split BY DOCUMENT (data/splits.json, reused if present): training never sees a test document
   - BIPIA train items train; BIPIA test items are only used for the final report
@@ -18,6 +22,7 @@ plus deepset's test split (out-of-domain when trained without --deepset, in-doma
 results/finetune_<name>.json.
 
   python finetune_injection.py --device cuda                 # RTX 4080: bf16, a few minutes
+  python finetune_injection.py --device cuda --deepset --public-negatives k8s --name ragshield-injection-v2
   python finetune_injection.py --device cuda --precision fp16 --batch 8 --grad-accum 2   # RTX 2080 (no fast bf16)
   python finetune_injection.py --dry-run                     # CPU smoke test of the whole pipeline"""
 import argparse
@@ -28,7 +33,7 @@ import time
 
 import numpy as np
 
-from common import HERE, vandelay
+from common import HERE, PUBLIC_CORPORA, load_public, vandelay
 from ragshield import chunking, delta
 from ragshield.detectors import INJECTION_MODEL
 
@@ -45,6 +50,10 @@ parser.add_argument('--precision', choices=['auto', 'bf16', 'fp16', 'fp32'], def
 parser.add_argument('--test-frac', type=float, default=0.3)
 parser.add_argument('--hosts-per-attack', type=int, default=3)
 parser.add_argument('--deepset', action='store_true', help='also train on deepset/prompt-injections (its test split is then in-domain)')
+parser.add_argument('--public-negatives', nargs='*', default=[], choices=PUBLIC_CORPORA,
+                    help='also train on clean pages from these fetched public corpora (they are in-domain afterwards)')
+parser.add_argument('--public-units', type=int, default=1200,
+                    help='per public corpus: training negatives sampled, a third each chunks, paragraphs and sentences')
 parser.add_argument('--seed', type=int, default=13)
 parser.add_argument('--dry-run', action='store_true')
 args = parser.parse_args()
@@ -87,11 +96,11 @@ def load_attacks(name):
     return out
 
 
-def units(doc_ids):
+def units(doc_ids, pool=None):
     """Clean text at the three granularities the classifier sees in production: chunks, paragraphs (deltas), sentences."""
     chunks, paras, sents = [], [], []
-    for d in docs:
-        if d.doc_id not in doc_ids:
+    for d in pool if pool is not None else docs:
+        if doc_ids is not None and d.doc_id not in doc_ids:
             continue
         chunks += chunking.chunk(d.text)
         for p in delta.paragraphs(d.text):
@@ -128,11 +137,20 @@ n_val = max(1, round(len(train_attacks) * 0.15))
 val_attacks, fit_attacks = train_attacks[:n_val], train_attacks[n_val:]
 negatives = [(t, 0, 'chunk') for t in tr_chunks] + [(t, 0, 'paragraph') for t in tr_paras] + \
             [(t, 0, 'sentence') for t in rng.sample(tr_sents, min(len(tr_sents), 2 * len(tr_paras)))]
+host_chunks, host_sents, public_counts = tr_chunks, tr_sents, {}
+for name in args.public_negatives:  # nothing here touches rng unless the flag is set, so v1 stays reproducible
+    p_chunks, p_paras, p_sents = units(None, load_public(name, 0)[0])
+    third = args.public_units // 3
+    p_chunks, p_paras, p_sents = (rng.sample(u, min(third, len(u))) for u in (p_chunks, p_paras, p_sents))
+    negatives += [(t, 0, f'{name}_chunk') for t in p_chunks] + [(t, 0, f'{name}_paragraph') for t in p_paras] + \
+                 [(t, 0, f'{name}_sentence') for t in p_sents]
+    host_chunks, host_sents = host_chunks + p_chunks, host_sents + p_sents
+    public_counts[name] = len(p_chunks) + len(p_paras) + len(p_sents)
 rng.shuffle(negatives)
 n_val_neg = max(1, round(len(negatives) * 0.15))
 val_neg, fit_neg = negatives[:n_val_neg], negatives[n_val_neg:]
-train_set = positives(fit_attacks, tr_chunks, tr_sents, rng, args.hosts_per_attack) + fit_neg
-val_set = positives(val_attacks, tr_chunks, tr_sents, rng, 1) + val_neg
+train_set = positives(fit_attacks, host_chunks, host_sents, rng, args.hosts_per_attack) + fit_neg
+val_set = positives(val_attacks, host_chunks, host_sents, rng, 1) + val_neg
 
 test_attacks = load_attacks('test')
 test_sets = {
@@ -251,7 +269,7 @@ result = {
     'config': {k: v for k, v in vars(args).items() if k not in ('dry_run',)},
     'data': {'train_examples': len(train_set), 'val_examples': len(val_set), 'train_docs': len(train_ids), 'test_docs': len(test_docs),
              'bipia_train_items_fit': len(fit_attacks), 'bipia_train_items_val': len(val_attacks), 'bipia_test_items': len(test_attacks),
-             'deepset': args.deepset, 'split_file': 'data/splits.json'},
+             'deepset': args.deepset, 'public_negatives': public_counts, 'split_file': 'data/splits.json'},
     'history': history, 'train_minutes': round((time.time() - t0) / 60, 1),
     'test_base': base_report, 'test_finetuned': tuned_report,
 }
@@ -260,7 +278,8 @@ name = 'finetune_dryrun.json' if args.dry_run else f'finetune_{args.name}.json'
 if not args.dry_run:
     (out_dir / 'README.md').write_text(
         f"# {args.name}\n\nFine-tuned from `{args.base}` (Apache-2.0) for RAG Shield. Training data: BIPIA train-split attacks (MIT, "
-        f"Microsoft) inserted unchanged into Vandelay class-corpus text from training documents only"
-        f"{', plus deepset/prompt-injections train (Apache-2.0)' if args.deepset else ''}. Labels: 0 SAFE, 1 INJECTION.\n"
+        f"Microsoft) inserted unchanged into Vandelay text from training documents only"
+        f"{', plus deepset/prompt-injections train (Apache-2.0)' if args.deepset else ''}"
+        f"{', plus clean pages from ' + ', '.join(args.public_negatives) if args.public_negatives else ''}. Labels: 0 SAFE, 1 INJECTION.\n"
         f"Evaluated on held-out documents ({', '.join(sorted(test_docs))}) with BIPIA test-split attacks; see results/{name}.\n")
 print(json.dumps({'test_base': base_report, 'test_finetuned': tuned_report}, indent=1))

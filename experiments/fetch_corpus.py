@@ -1,12 +1,14 @@
-"""Fetch the public corpora for experiment 6 at pinned versions, as data/external/<name>/docs.jsonl (gitignored).
+"""Fetch the public corpora for experiments 5 and 6 at pinned versions, as data/external/<name>/docs.jsonl (gitignored).
 
   k8s     Kubernetes documentation, content/en/docs/tasks (CC BY 4.0, (c) The Kubernetes Authors): a public runbook-style
           wiki, full of shell commands and imperative steps
   attack  MITRE ATT&CK Enterprise v20.0 technique pages (MITRE ATT&CK license: research, development and commercial use
           with MITRE's copyright notice): security text that describes attacker behavior
+  docker  Docker documentation, content/manuals without release notes (Apache-2.0, Docker Inc.): how-to pages like k8s
+          but written by other people, so a classifier trained on k8s text can be tested on how-to text it never saw
 
 Each line: {"doc_id", "title", "doc_type", "text"}. SOURCE.md next to it records the version, license and attribution.
-Usage: python fetch_corpus.py [k8s|attack|all]"""
+Usage: python fetch_corpus.py [k8s|attack|docker|all]"""
 import json
 import re
 import subprocess
@@ -19,6 +21,7 @@ HERE = Path(__file__).resolve().parents[1]
 K8S_REF = '177aebb48df75c35d179ae1fb0338afa15e4abd4'  # kubernetes/website main, 2026-11-02
 ATTACK_REF = 'c2494b29dd268c46a5d0ea0990553e4327cd2253'  # mitre-attack/attack-stix-data master, 2026-10-13
 ATTACK_VERSION = '20.0'
+DOCKER_REF = '2eaa01ac4fbe81c8cb8705724a05e19474dd681a'  # docker/docs main, 2026-11-02
 
 
 def write(name, docs, source_md):
@@ -43,19 +46,23 @@ def strip_hugo(body):
     return re.sub(r'\n{3,}', '\n\n', body).strip()
 
 
-def fetch_k8s():
+def hugo_pages(repo, ref, path, name, default_type, skip=lambda rel: False):
+    """Markdown pages under path in a Hugo docs repo at a pinned commit (sparse, shallow checkout)."""
     with tempfile.TemporaryDirectory() as tmp:
         git = lambda *a: subprocess.run(['git', '-C', tmp, *a], check=True, capture_output=True, text=True)
         git('init', '-q')
-        git('remote', 'add', 'origin', 'https://github.com/kubernetes/website.git')
-        git('sparse-checkout', 'set', '--no-cone', '/content/en/docs/tasks/')
-        git('fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', K8S_REF)
+        git('remote', 'add', 'origin', repo)
+        git('sparse-checkout', 'set', '--no-cone', f'/{path}/')
+        git('fetch', '-q', '--depth', '1', '--filter=blob:none', 'origin', ref)
         git('checkout', '-q', 'FETCH_HEAD')
-        root = Path(tmp) / 'content/en/docs/tasks'
+        root = Path(tmp) / path
         docs = []
-        for path in sorted(root.rglob('*.md')):
-            raw = path.read_text(encoding='utf-8')
-            title, body = path.stem, raw
+        for page in sorted(root.rglob('*.md')):
+            rel = page.relative_to(root).with_suffix('')
+            if skip(rel):
+                continue
+            raw = page.read_text(encoding='utf-8')
+            title, body = page.stem, raw
             m = re.match(r'^---\n(.*?)\n---\n', raw, flags=re.S)
             if m:
                 t = re.search(r'^title:\s*["\']?(.*?)["\']?\s*$', m.group(1), flags=re.M)
@@ -64,9 +71,13 @@ def fetch_k8s():
             body = strip_hugo(body)
             if len(body) < 300:
                 continue
-            rel = path.relative_to(root).with_suffix('')
-            docs.append({'doc_id': 'k8s/' + str(rel).replace('/_index', ''), 'title': title,
-                         'doc_type': rel.parts[0] if len(rel.parts) > 1 else 'tasks', 'text': f'# {title}\n\n{body}'})
+            docs.append({'doc_id': f'{name}/' + str(rel).replace('/_index', ''), 'title': title,
+                         'doc_type': rel.parts[0] if len(rel.parts) > 1 else default_type, 'text': f'# {title}\n\n{body}'})
+    return docs
+
+
+def fetch_k8s():
+    docs = hugo_pages('https://github.com/kubernetes/website.git', K8S_REF, 'content/en/docs/tasks', 'k8s', 'tasks')
     write('k8s', docs, f"""# Kubernetes documentation (tasks)
 
 Source: https://github.com/kubernetes/website, commit {K8S_REF}, path content/en/docs/tasks.
@@ -109,9 +120,22 @@ MITRE Corporation.
 """)
 
 
+def fetch_docker():
+    docs = hugo_pages('https://github.com/docker/docs.git', DOCKER_REF, 'content/manuals', 'docker', 'manuals',
+                      skip=lambda rel: 'release-notes' in str(rel) or rel.name.startswith('release'))
+    write('docker', docs, f"""# Docker documentation (manuals)
+
+Source: https://github.com/docker/docs, commit {DOCKER_REF}, path content/manuals.
+License: Apache License 2.0. Copyright Docker, Inc.
+Changes: Hugo front matter, shortcodes and HTML comments removed; release notes and pages under 300 characters skipped.
+""")
+
+
 if __name__ == '__main__':
     which = sys.argv[1] if len(sys.argv) > 1 else 'all'
     if which in ('k8s', 'all'):
         fetch_k8s()
     if which in ('attack', 'all'):
         fetch_attack()
+    if which in ('docker', 'all'):
+        fetch_docker()
