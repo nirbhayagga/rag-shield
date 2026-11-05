@@ -5,7 +5,7 @@ submission is checked with Turnstile and rate-limited per salted IP hash, and no
 No analytics and no third-party scripts except Turnstile (see `public/_headers` for the CSP).
 
 ```
-public/            index.html, privacy.html, app.js, styles.css, _headers
+public/            index.html, privacy.html, terms.html, app.js, styles.css, _headers
 functions/api/     apply.js (Pages Function)
 lib/validate.js    validation shared with the tests
 schema.sql         D1 schema
