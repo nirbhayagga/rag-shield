@@ -23,11 +23,13 @@ class Policy:
     min_rank: float = 0.25          # chunks from block_tiers whose ranking weight falls below this are dropped
     delta_injection: float = 0.50   # an added passage scored on its own (no dilution by the surrounding page)
     delta_offtopic: float = 0.45    # 1 - max cosine to the previous version; calibrated on benign edits in experiment 3
-    overfetch: int = 3              # fetch k * overfetch candidates before filtering
+    overfetch: int = 3              # fetch k * overfetch candidates before filtering, and more if too few survive
+    max_candidates: int = 500       # stop there and log a 'starved' event: each candidate costs a signature check
     lockdown: bool = False          # incident kill switch: serve only verified chunks with no warning at all
     hidden_check: bool = True       # flag invisible, tag and look-alike characters (the classifier always scores cleaned text)
-    # Low-trust content that looks unlike anything in the trusted corpus is dropped, not just labeled: in the PoisonedRAG
-    # experiment a warning label alone left 84% of off-topic poison answers intact, because the model reads the chunk anyway.
+    # Low-trust content that looks unlike anything in the trusted corpus is dropped, not just flagged. In the PoisonedRAG
+    # experiment, off-topic poison that was flagged but still reached the model worked 84% of the time, and 82% when the model
+    # was shown the flag (it hedged, but repeated the false answer). Dropped, it worked 0% of the time.
     outlier_block_tiers: tuple = ('low',)
 
 
@@ -155,7 +157,7 @@ class Shield:
         return {'action': 'warn' if reasons else 'pass', 'reason': ', '.join(reasons), 'trust': round(weight, 3),
                 'source_id': record.source_id, 'trust_tier': tier}
 
-    def filter(self, hits, k):
+    def _keep(self, hits):
         kept = []
         for hit in hits:
             decision = self.decide(hit)
@@ -163,12 +165,31 @@ class Shield:
                 self._event(hit['chunk_id'], 'drop', decision['reason'])
                 continue
             kept.append({**hit, 'trust': decision, 'final_score': hit['score'] * decision['trust']})
+        return kept
+
+    def filter(self, hits, k):
+        kept = self._keep(hits)
         kept.sort(key=lambda h: -h['final_score'])
         return kept[:k]
 
     def retrieve(self, question, k=5, shielded=True):
-        hits = self.index.search(self.embedder.query(question), k * (self.policy.overfetch if shielded else 1))
-        return self.filter(hits, k) if shielded else hits[:k]
+        query = self.embedder.query(question)
+        if not shielded:
+            return self.index.search(query, k)
+        # Dropped chunks must not use up the candidates, or a flood of bad chunks on a topic hides the good ones below them.
+        cap = max(self.policy.max_candidates, k)
+        fetch, seen, kept = min(k * self.policy.overfetch, cap), 0, []
+        while True:
+            hits = self.index.search(query, fetch)
+            kept += self._keep(hits[seen:])
+            seen = len(hits)
+            if len(kept) >= k or seen < fetch or fetch >= cap:
+                break
+            fetch = min(fetch * 2, cap)
+        if len(kept) < k and seen >= cap:
+            self._event('-', 'starved', f'{len(kept)} of {k} passages left after {seen} candidates')
+        kept.sort(key=lambda h: -h['final_score'])
+        return kept[:k]
 
     def _event(self, chunk_id, action, reason):
         self.events.append((time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), chunk_id, action, reason))
