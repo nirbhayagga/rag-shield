@@ -9,7 +9,10 @@ Policy constants were fixed on clean data (experiment 1) before this run; only w
 is reported with its clean-recall cost. Writes results/attack_bipia.json.
 
 With --injection-model and --split test (for a fine-tuned classifier), attacks are hosted only in held-out documents, clean
-rates come only from their chunks, and the report goes to results/attack_bipia-<model>-<split>.json."""
+rates come only from their chunks, and the report goes to results/attack_bipia-<model>-<split>.json.
+
+--attacks <file> runs the same measurements on your own attack file instead of BIPIA (--repeat N places each attack on N
+random hosts). The report name then includes the file's name."""
 import argparse
 import json
 import random
@@ -18,7 +21,7 @@ import time
 
 import numpy as np
 
-from common import HERE, H, CachedEmbedder, CachedInjection, add_eval_args, eval_doc_ids, make_shield, out_path, outcome, outcome_counts, vandelay
+from common import H, CachedEmbedder, CachedInjection, add_attack_args, add_eval_args, attack_stem, eval_doc_ids, load_attacks, make_shield, out_path, outcome, outcome_counts, vandelay
 from ragshield import chunking
 from ragshield.shield import Policy
 
@@ -27,6 +30,7 @@ parser.add_argument('--device', default=None)
 parser.add_argument('--k', type=int, default=5)
 parser.add_argument('--seed', type=int, default=7)
 add_eval_args(parser)
+add_attack_args(parser)
 args = parser.parse_args()
 WEIGHTS = [1.0, 0.85, 0.5]
 
@@ -34,10 +38,7 @@ docs, questions = vandelay()
 embedder, injection = CachedEmbedder(device=args.device), CachedInjection(args.injection_model, device=args.device)
 eligible = eval_doc_ids(docs, args.split)
 
-attacks = []
-for split in ('text', 'code'):
-    for category, items in json.loads((HERE / f'data/external/bipia/{split}_attack_test.json').read_text()).items():
-        attacks += [{'split': split, 'category': category, 'text': t} for t in items]
+attacks, attack_source = load_attacks(args)
 
 clean_chunks = [(d.doc_id, i, c) for d in docs if d.doc_id in eligible for i, c in enumerate(chunking.chunk(d.text))]
 rng = random.Random(args.seed)
@@ -75,7 +76,7 @@ def payload_chunk(shield, poison):
 t0 = time.time()
 clean = build()
 results = {'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'attacks': len(poisons),
-           'source': 'microsoft/BIPIA benchmark/{text,code}_attack_test.json (MIT)', 'seed': args.seed, 'k': args.k,
+           'source': attack_source, 'seed': args.seed, 'k': args.k,
            'injection_model': args.injection_model, 'split': args.split, 'eval_docs': len(eligible)}
 
 # Clean-recall cost of each ranking setting (no poison present).
@@ -190,5 +191,5 @@ results['T1_direct_store_writes'] = {'tampered_chunks': len(targets), 'caught_by
 
 results['scenarios'] = {k: v['summary'] for k, v in scenarios.items()}
 results['runtime_sec'] = round(time.time() - t0, 1)
-out_path('attack_bipia', args).write_text(json.dumps({**results, 'rows': {k: v['rows'] for k, v in scenarios.items()}}, indent=2))
+out_path(attack_stem('attack_bipia', args), args).write_text(json.dumps({**results, 'rows': {k: v['rows'] for k, v in scenarios.items()}}, indent=2))
 print(json.dumps(results, indent=2))

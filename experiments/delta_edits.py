@@ -9,7 +9,10 @@ The off-topic threshold is calibrated on the first half of the benign edits (tar
 second half, so no reported number is tuned on the data it is reported for. Writes results/delta_edits.json.
 
 With --injection-model and --split test (for a fine-tuned classifier), only held-out documents are edited or supply benign
-text, and the report goes to results/delta_edits-<model>-<split>.json."""
+text, and the report goes to results/delta_edits-<model>-<split>.json.
+
+--attacks <file> runs the same measurements on your own attack file instead of BIPIA (--repeat N uses each attack N times).
+The report name then includes the file's name."""
 import argparse
 import json
 import random
@@ -18,7 +21,7 @@ import time
 
 import numpy as np
 
-from common import HERE, CachedEmbedder, CachedInjection, add_eval_args, eval_doc_ids, make_shield, out_path, outcome, outcome_counts, vandelay
+from common import CachedEmbedder, CachedInjection, add_attack_args, add_eval_args, attack_stem, eval_doc_ids, load_attacks, make_shield, out_path, outcome, outcome_counts, vandelay
 from ragshield import delta
 from ragshield.shield import Policy
 
@@ -28,6 +31,7 @@ parser.add_argument('--k', type=int, default=5)
 parser.add_argument('--seed', type=int, default=11)
 parser.add_argument('--target-fpr', type=float, default=0.05)
 add_eval_args(parser)
+add_attack_args(parser)
 args = parser.parse_args()
 
 docs, _ = vandelay()
@@ -37,10 +41,7 @@ eligible = eval_doc_ids(docs, args.split)
 pool = [d for d in docs if d.doc_id in eligible]  # pages that may be edited or lend benign text
 rng = random.Random(args.seed)
 
-attacks = []
-for split in ('text', 'code'):
-    for category, items in json.loads((HERE / f'data/external/bipia/{split}_attack_test.json').read_text()).items():
-        attacks += [{'split': split, 'category': category, 'text': t} for t in items]
+attacks, attack_source = load_attacks(args)
 
 
 def edit(doc, added, style):
@@ -163,7 +164,7 @@ outcomes = outcome_counts([c['final']['outcome'] for c in retrieved], len(retrie
 result = {
     'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'seed': args.seed,
     'injection_model': args.injection_model, 'split': args.split, 'eval_docs': len(pool),
-    'attack_source': 'microsoft/BIPIA benchmark/{text,code}_attack_test.json (MIT)',
+    'attack_source': attack_source,
     'calibration': {'benign_calibration_edits': int(len(calibration)), 'target_fpr': args.target_fpr,
                     'offtopic_threshold': round(threshold, 4), 'delta_injection_threshold': round(inj_threshold, 4)},
     'attacks': {'n': len(attack_rows), **detection(attack_rows),
@@ -181,5 +182,5 @@ result = {
 for c in attack_rows:
     if not c['final']['flagged']:
         result['missed_attacks_by_category'][c['category']] = result['missed_attacks_by_category'].get(c['category'], 0) + 1
-out_path('delta_edits', args).write_text(json.dumps({**result, 'cases': [{k: v for k, v in c.items() if k != 'text'} for c in cases]}, indent=2))
+out_path(attack_stem('delta_edits', args), args).write_text(json.dumps({**result, 'cases': [{k: v for k, v in c.items() if k != 'text'} for c in cases]}, indent=2))
 print(json.dumps(result, indent=2))
