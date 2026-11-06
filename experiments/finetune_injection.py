@@ -13,6 +13,7 @@ Data (no new attack content is written; attacks are inserted unchanged):
              imperative steps, which v1 (trained without it) flagged as injection on 51% of Kubernetes chunks. Training
              attacks are also inserted into these pages, so "a command in a runbook" and "an attack in a runbook" both
              appear. A corpus used here is in-domain afterwards: test on one that wasn't (docker for how-to text)
+  optional   --public-only drops the Vandelay text, so the training data is all public and the weights can be published
 Leakage controls:
   - Vandelay is split BY DOCUMENT (data/splits.json, reused if present): training never sees a test document
   - BIPIA train items train; BIPIA test items are only used for the final report
@@ -23,6 +24,8 @@ results/finetune_<name>.json.
 
   python finetune_injection.py --device cuda                 # RTX 4080: bf16, a few minutes
   python finetune_injection.py --device cuda --deepset --public-negatives k8s --name ragshield-injection-v2
+  python finetune_injection.py --device cuda --deepset --public-only --public-negatives k8s attack --name ragshield-injection-v3
+  python finetune_injection.py --device cuda --deepset --public-only --public-negatives k8s attack --test-corpus docker   # no private data needed
   python finetune_injection.py --device cuda --precision fp16 --batch 8 --grad-accum 2   # RTX 2080 (no fast bf16)
   python finetune_injection.py --dry-run                     # CPU smoke test of the whole pipeline"""
 import argparse
@@ -54,9 +57,15 @@ parser.add_argument('--public-negatives', nargs='*', default=[], choices=PUBLIC_
                     help='also train on clean pages from these fetched public corpora (they are in-domain afterwards)')
 parser.add_argument('--public-units', type=int, default=1200,
                     help='per public corpus: training negatives sampled, a third each chunks, paragraphs and sentences')
+parser.add_argument('--public-only', action='store_true', help='train on --public-negatives only, with no private text')
+parser.add_argument('--test-corpus', default=None, choices=PUBLIC_CORPORA, help='report on this public corpus instead of the private test documents')
 parser.add_argument('--seed', type=int, default=13)
 parser.add_argument('--dry-run', action='store_true')
 args = parser.parse_args()
+if args.public_only and not args.public_negatives:
+    parser.error('--public-only needs --public-negatives')
+if args.test_corpus in args.public_negatives:
+    parser.error('--test-corpus must be a corpus the model does not train on')
 
 import torch  # noqa: E402  (after argparse so --help is fast)
 from sklearn.metrics import roc_auc_score  # noqa: E402
@@ -74,18 +83,25 @@ if args.dry_run:
 
 # ----------------------------------------------------------------------------------------------- data
 
-docs, _ = vandelay()
-split_path = HERE / 'data/splits.json'
-if split_path.exists():
-    split = json.loads(split_path.read_text())
-else:
-    ids = sorted(d.doc_id for d in docs)
-    random.Random(args.seed).shuffle(ids)
-    n_test = round(len(ids) * args.test_frac)
-    split = {'seed': args.seed, 'test_docs': sorted(ids[:n_test]), 'train_docs': sorted(ids[n_test:]),
-             'note': 'Document-level split. Anything trained on train_docs must be evaluated on test_docs only.'}
-    split_path.write_text(json.dumps(split, indent=2))
-test_docs = set(split['test_docs'])
+PUBLIC_SOURCES = {'k8s': 'Kubernetes documentation (CC BY 4.0, The Kubernetes Authors)',
+                  'attack': 'MITRE ATT&CK (c) The MITRE Corporation, reproduced with its permission under the ATT&CK license',
+                  'docker': 'Docker documentation (Apache-2.0, Docker, Inc.)',
+                  'm365': 'Microsoft 365 documentation (CC BY 4.0, Microsoft Corporation)'}
+
+docs = [] if args.public_only and args.test_corpus else vandelay()[0]
+test_docs = set()
+if docs:
+    split_path = HERE / 'data/splits.json'
+    if split_path.exists():
+        split = json.loads(split_path.read_text())
+    else:
+        ids = sorted(d.doc_id for d in docs)
+        random.Random(args.seed).shuffle(ids)
+        n_test = round(len(ids) * args.test_frac)
+        split = {'seed': args.seed, 'test_docs': sorted(ids[:n_test]), 'train_docs': sorted(ids[n_test:]),
+                 'note': 'Document-level split. Anything trained on train_docs must be evaluated on test_docs only.'}
+        split_path.write_text(json.dumps(split, indent=2))
+    test_docs = set(split['test_docs'])
 
 
 def load_attacks(name):
@@ -127,9 +143,9 @@ def positives(attacks, chunks, sents, rng, hosts_per_attack):
 
 
 rng = random.Random(args.seed)
-train_ids = {d.doc_id for d in docs} - test_docs
+train_ids = set() if args.public_only else {d.doc_id for d in docs} - test_docs
 tr_chunks, tr_paras, tr_sents = units(train_ids)
-te_chunks, te_paras, te_sents = units(test_docs)
+te_chunks, te_paras, te_sents = units(None, load_public(args.test_corpus)[0]) if args.test_corpus else units(test_docs)
 
 train_attacks = load_attacks('train')
 rng.shuffle(train_attacks)
@@ -269,7 +285,8 @@ result = {
     'config': {k: v for k, v in vars(args).items() if k not in ('dry_run',)},
     'data': {'train_examples': len(train_set), 'val_examples': len(val_set), 'train_docs': len(train_ids), 'test_docs': len(test_docs),
              'bipia_train_items_fit': len(fit_attacks), 'bipia_train_items_val': len(val_attacks), 'bipia_test_items': len(test_attacks),
-             'deepset': args.deepset, 'public_negatives': public_counts, 'split_file': 'data/splits.json'},
+             'deepset': args.deepset, 'public_negatives': public_counts, 'public_only': args.public_only,
+             'test_corpus': args.test_corpus or 'data/splits.json test documents'},
     'history': history, 'train_minutes': round((time.time() - t0) / 60, 1),
     'test_base': base_report, 'test_finetuned': tuned_report,
 }
@@ -278,8 +295,10 @@ name = 'finetune_dryrun.json' if args.dry_run else f'finetune_{args.name}.json'
 if not args.dry_run:
     (out_dir / 'README.md').write_text(
         f"# {args.name}\n\nFine-tuned from `{args.base}` (Apache-2.0) for RAG Shield. Training data: BIPIA train-split attacks (MIT, "
-        f"Microsoft) inserted unchanged into Vandelay text from training documents only"
+        f"Microsoft) inserted unchanged into "
+        f"{'clean pages only' if args.public_only else 'Vandelay text from training documents only'}"
         f"{', plus deepset/prompt-injections train (Apache-2.0)' if args.deepset else ''}"
-        f"{', plus clean pages from ' + ', '.join(args.public_negatives) if args.public_negatives else ''}. Labels: 0 SAFE, 1 INJECTION.\n"
-        f"Evaluated on held-out documents ({', '.join(sorted(test_docs))}) with BIPIA test-split attacks; see results/{name}.\n")
+        f"{', with clean pages from: ' + '; '.join(PUBLIC_SOURCES[c] for c in args.public_negatives) if args.public_negatives else ''}. "
+        f"Labels: 0 SAFE, 1 INJECTION.\n"
+        f"Evaluated on {args.test_corpus or 'held-out documents (' + ', '.join(sorted(test_docs)) + ')'} with BIPIA test-split attacks; see results/{name}.\n")
 print(json.dumps({'test_base': base_report, 'test_finetuned': tuned_report}, indent=1))

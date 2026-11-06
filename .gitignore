@@ -17,6 +17,7 @@ results/
 data/external/k8s/
 data/external/attack/
 data/external/docker/
+data/external/m365/
 
 # Packaging output
 build/

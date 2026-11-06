@@ -6,9 +6,11 @@
           with MITRE's copyright notice): security text that describes attacker behavior
   docker  Docker documentation, content/manuals without release notes (Apache-2.0, Docker Inc.): how-to pages like k8s
           but written by other people, so a classifier trained on k8s text can be tested on how-to text it never saw
+  m365    Microsoft 365 admin documentation, microsoft-365/admin (CC BY 4.0, (c) Microsoft Corporation): IT how-to pages
+          with nothing to do with containers, the closest public text to a company's internal help pages
 
 Each line: {"doc_id", "title", "doc_type", "text"}. SOURCE.md next to it records the version, license and attribution.
-Usage: python fetch_corpus.py [k8s|attack|docker|all]"""
+Usage: python fetch_corpus.py [k8s|attack|docker|m365|all]"""
 import json
 import re
 import subprocess
@@ -22,6 +24,7 @@ K8S_REF = '177aebb48df75c35d179ae1fb0338afa15e4abd4'  # kubernetes/website main,
 ATTACK_REF = 'c2494b29dd268c46a5d0ea0990553e4327cd2253'  # mitre-attack/attack-stix-data master, 2026-10-13
 ATTACK_VERSION = '20.0'
 DOCKER_REF = '2eaa01ac4fbe81c8cb8705724a05e19474dd681a'  # docker/docs main, 2026-11-02
+M365_REF = 'ee0f8f75d0045cc6397fe0a9c2c84d2aba1e01d6'  # MicrosoftDocs/microsoft-365-docs default branch, 2026-11-04
 
 
 def write(name, docs, source_md):
@@ -46,7 +49,22 @@ def strip_hugo(body):
     return re.sub(r'\n{3,}', '\n\n', body).strip()
 
 
-def hugo_pages(repo, ref, path, name, default_type, skip=lambda rel: False):
+def strip_learn(body):
+    """Microsoft Learn Markdown: drop the page's own title, images, includes, videos, monikers and callout markers, and keep
+    link text without its target."""
+    body = re.sub(r'\A# .*\n+', '', body)
+    body = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', body)
+    body = re.sub(r':::image\b.*?:::', '', body)
+    body = re.sub(r'</?(?:a|b|i|em|strong|sup|sub)\b[^>]*>', '', body)
+    body = re.sub(r'</?(?:ul|ol|li)\b[^>]*>', ' ', body)
+    body = re.sub(r'^[ \t>]*(\[!(?:INCLUDE|VIDEO|div)\b.*|\[!(?:NOTE|IMPORTANT|TIP|WARNING|CAUTION)\]\s*|:::.*)$', '', body, flags=re.M)
+    body = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', body)
+    body = re.sub(r'^([ \t]*)> ?', r'\1', body, flags=re.M)
+    body = '\n'.join(line.rstrip() for line in body.split('\n'))
+    return re.sub(r'\n{3,}', '\n\n', body).strip()
+
+
+def hugo_pages(repo, ref, path, name, default_type, skip=lambda rel: False, clean=lambda body: body):
     """Markdown pages under path in a Hugo docs repo at a pinned commit (sparse, shallow checkout)."""
     with tempfile.TemporaryDirectory() as tmp:
         git = lambda *a: subprocess.run(['git', '-C', tmp, *a], check=True, capture_output=True, text=True)
@@ -68,7 +86,7 @@ def hugo_pages(repo, ref, path, name, default_type, skip=lambda rel: False):
                 t = re.search(r'^title:\s*["\']?(.*?)["\']?\s*$', m.group(1), flags=re.M)
                 title = t.group(1) if t else title
                 body = raw[m.end():]
-            body = strip_hugo(body)
+            body = clean(strip_hugo(body))
             if len(body) < 300:
                 continue
             docs.append({'doc_id': f'{name}/' + str(rel).replace('/_index', ''), 'title': title,
@@ -131,6 +149,16 @@ Changes: Hugo front matter, shortcodes and HTML comments removed; release notes 
 """)
 
 
+def fetch_m365():
+    docs = hugo_pages('https://github.com/MicrosoftDocs/microsoft-365-docs.git', M365_REF, 'microsoft-365/admin', 'm365', 'admin', clean=strip_learn)
+    write('m365', docs, f"""# Microsoft 365 admin documentation
+
+Source: https://github.com/MicrosoftDocs/microsoft-365-docs, commit {M365_REF}, path microsoft-365/admin.
+License: Creative Commons Attribution 4.0 International (CC BY 4.0). (c) Microsoft Corporation.
+Changes: front matter, images, includes, videos, callout markers, inline HTML tags and link targets removed; pages under 300 characters skipped.
+""")
+
+
 if __name__ == '__main__':
     which = sys.argv[1] if len(sys.argv) > 1 else 'all'
     if which in ('k8s', 'all'):
@@ -139,3 +167,5 @@ if __name__ == '__main__':
         fetch_attack()
     if which in ('docker', 'all'):
         fetch_docker()
+    if which in ('m365', 'all'):
+        fetch_m365()

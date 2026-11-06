@@ -35,7 +35,7 @@ def vandelay():
     return H.load_corpus(HERE / 'data/vandelay/corpus'), H.load_questions(HERE / 'data/vandelay/questions.yaml')
 
 
-PUBLIC_CORPORA = ('k8s', 'attack', 'docker')
+PUBLIC_CORPORA = ('k8s', 'attack', 'docker', 'm365')
 
 
 @dataclass
