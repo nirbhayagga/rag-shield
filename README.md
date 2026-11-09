@@ -118,48 +118,60 @@ cd experiments
 ../.venv/bin/python public_corpus.py --corpus m365
 ```
 
-**Public corpora** (experiment 6). These runs use every page. Each cell shows three classifiers: **off-the-shelf / fine-tuned
-v1 / fine-tuned v2**. v1 and v2 are fine-tuned on the private corpus and their weights aren't published, so installing
-the SDK gets you the first number. v2 also trained on Kubernetes pages, so its Kubernetes numbers (marked \*) aren't a
-held-out test. Docker and ATT&CK are held out for both.
+**Public corpora** (experiment 6). These runs use every page. v1 and v2 are fine-tuned partly on the private corpus, so
+their weights can't be published. v3 trains only on public data: Kubernetes, ATT&CK, deepset and BIPIA's training attacks
+(`finetune_injection.py --public-only`). A \* marks a corpus that model trained on, so that row isn't a held-out test.
 
-| | ATT&CK (1,587 chunks) | Kubernetes (2,711) | Docker (8,765) |
-|---|---|---|---|
-| Clean chunks scored as injection (≥ 0.5) | 2.7% / 0.2% / 0% | 1.3% / **50.9%** / 0.3%\* | 1.9% / **44.5%** / 1.2% |
-| Clean chunks carrying any warning (the review workload) | 4.7% / 2.2% / 2.0% | 3.3% / 52.1% / 2.3%\* | 3.8% / 45.8% / 3.2% |
-| BIPIA attack pasted into a chunk, caught on the whole chunk | 13.6% / 90.4% / 92.8% | 4.0% / 98.4% / 92.8%\* | 5.6% / 97.6% / 95.2% |
-| BIPIA attack added as a page edit, caught by delta scoring | 74.4% / 97.6% / 96.8% | 37.6% / 97.6% / 94.4%\* | 45.6% / 96.0% / 95.2% |
-| Benign page edits flagged | 12.0% / 9.6% / 9.6% | 4.8% / 25.6% / 2.4%\* | 12.0% / 26.4% / 6.4% |
+| Corpus (chunks) | Classifier | Clean chunks scored as injection (≥ 0.5) | Clean chunks with any warning | Attack pasted into a chunk, caught | Attack added as a page edit, caught | Benign page edits flagged |
+|---|---|---|---|---|---|---|
+| Microsoft 365 admin (3,172) | Off-the-shelf | 1.9% | 3.9% | 7.2% | 46.4% | 10.4% |
+| | v1 | **50.2%** | 51.1% | 99.2% | 97.6% | 35.2% |
+| | v2 | 2.4% | 4.4% | 92.0% | 94.4% | 8.8% |
+| | **v3** | **0.7%** | 2.7% | 88.0% | **95.2%** | 8.8% |
+| Docker (8,765) | Off-the-shelf | 1.9% | 3.8% | 5.6% | 45.6% | 12.0% |
+| | v1 | **44.5%** | 45.8% | 97.6% | 96.0% | 26.4% |
+| | v2 | 1.2% | 3.2% | 95.2% | 95.2% | 6.4% |
+| | **v3** | **0.3%** | 2.3% | 90.4% | **92.8%** | 5.6% |
+| ATT&CK (1,587) | Off-the-shelf | 2.7% | 4.7% | 13.6% | 74.4% | 12.0% |
+| | v1 | 0.2% | 2.2% | 90.4% | 97.6% | 9.6% |
+| | v2 | 0% | 2.0% | 92.8% | 96.8% | 9.6% |
+| | v3\* | 0% | 2.0% | 92.8% | 97.6% | 9.6% |
+| Kubernetes (2,711) | Off-the-shelf | 1.3% | 3.3% | 4.0% | 37.6% | 4.8% |
+| | v1 | **50.9%** | 52.1% | 98.4% | 97.6% | 25.6% |
+| | v2\* | 0.3% | 2.3% | 92.8% | 94.4% | 2.4% |
+| | v3\* | 0.1% | 2.1% | 89.6% | 94.4% | 2.4% |
 
 - **The off-the-shelf classifier** rarely scores an attack paragraph as injection when the whole chunk is classified;
   the rest of the page dilutes it. Scoring only what an edit added (delta scoring) catches far more.
-- **v1 transfers to security writing but not to how-to docs.** It scores about half of all Kubernetes and Docker chunks
-  as injection, mostly configuration steps ("add the following to your `~/.bashrc`") and command output. It learned that
-  imperative text in a document is an attack.
-- **v2 fixes that.** It adds 1,200 Kubernetes passages as negatives (`finetune_injection.py --public-negatives k8s`). On
-  Docker's docs, which it never saw, false alarms fall from 44.5% to 1.2%, below the off-the-shelf classifier, while
-  it still flags 95% of attack edits. On ATT&CK, also unseen, no clean chunk scores as injection. Most benign edits it
-  flags are caught for being off-topic, not by the classifier.
-- **What this doesn't show.** Docker and Kubernetes are both container docs, so other how-to writing is untested. The
-  off-the-shelf classifier stays the SDK's default until a model trained only on public data is available. That's v3
-  (`finetune_injection.py --public-only --public-negatives k8s attack`), tested on Docker and Microsoft 365 admin docs,
-  which it never sees.
+- **v1 transfers to security writing but not to how-to docs.** It scores about half of all Kubernetes, Docker and
+  Microsoft 365 chunks as injection, mostly configuration steps ("add the following to your `~/.bashrc`") and command
+  output. It learned that imperative text in a document is an attack.
+- **v2 fixes that** by adding 1,200 Kubernetes passages as negatives.
+- **v3 keeps the fix with public data only.** On Docker and Microsoft 365 admin docs, which it never saw, it scores
+  fewer clean chunks as injection than the off-the-shelf classifier and flags 93–95% of attack edits, about twice as
+  many. Most benign edits it flags there are caught for being off-topic, not by the classifier. On the private corpus,
+  which it also never saw, it flags 94.4% of attack edits on the 10 held-out documents at 12.9% of benign edits, against
+  61.6% at 25.8% for the off-the-shelf classifier (shipped thresholds).
+- **What this doesn't show.** These attacks all come from BIPIA. On a small private set of attacks written as ordinary
+  notes, one of them phrased as a note from a person in authority, v2 and v3 flagged fewer page edits than the
+  off-the-shelf classifier (about 64% against 89%). The notes are few, so treat that as a warning, not a rate.
+- **Default.** The SDK uses the off-the-shelf classifier by default. The public-data weights will be published with the 0.1.0 release.
 
 **Hidden characters** (experiment 5). Each BIPIA test attack is disguised and then placed inside a clean chunk. "Caught"
 means either the cleaned text scores ≥ 0.5 or the check flags the disguise.
 
-| Disguise | Off-the-shelf alone, Kubernetes hosts | Off-the-shelf alone, private-corpus hosts | Fine-tuned v2 alone, Docker hosts | With the check |
+| Disguise | Off-the-shelf alone, Kubernetes hosts | Off-the-shelf alone, private-corpus hosts | Fine-tuned v3 alone, Microsoft 365 hosts | With the check |
 |---|---|---|---|---|
-| none (plain attack) | 0% | 3.2% | 92.8% | unchanged (nothing to find) |
-| zero-width space every 3 characters | 19.2% | 40.0% | 82.4% | 100% |
-| zero-width joiner inside words | 4.8% | 17.6% | 64.0% | 100% |
-| Cyrillic and Greek look-alikes | 4.0% | 13.6% | 73.6% | 100% |
-| fullwidth letters | 7.2% | 20.0% | 6.4% | 100% |
-| Unicode tag characters (invisible, model-readable) | 3.2% | 8.0% | 0.8% | 100% |
+| none (plain attack) | 0% | 3.2% | 89.6% | unchanged (nothing to find) |
+| zero-width space every 3 characters | 19.2% | 40.0% | 59.2% | 100% |
+| zero-width joiner inside words | 4.8% | 17.6% | 45.6% | 100% |
+| Cyrillic and Greek look-alikes | 4.0% | 13.6% | 32.0% | 100% |
+| fullwidth letters | 7.2% | 20.0% | 23.2% | 100% |
+| Unicode tag characters (invisible, model-readable) | 3.2% | 8.0% | 0% | 100% |
 
 The check raised no false alarms on any of these:
 
-- 400 clean Kubernetes chunks and 400 clean Docker chunks
+- 400 clean chunks each from Kubernetes, Docker and Microsoft 365
 - 215 private-corpus chunks
 - 125 plain attacks (some with emoji)
 - deepset's 399 benign prompts (88 of them non-ASCII, in several languages)
@@ -167,9 +179,9 @@ The check raised no false alarms on any of these:
 The check catches the disguise, not the injection. A plain attack pasted into a long page is the classifier's job, and
 the off-the-shelf classifier mostly misses it (the first row).
 
-A better classifier doesn't make the check redundant. v2 catches 92.8% of plain attacks inside Docker chunks, but 6.4%
-of the same attacks in fullwidth letters and 0.8% as tag characters. Cleaned by the check, they score 92% again, and
-the check flags all of them.
+A better classifier doesn't make the check redundant. v3 catches 89.6% of plain attacks inside Microsoft 365 chunks, but
+23.2% of the same attacks in fullwidth letters and none as tag characters. Cleaned by the check, they score 87–90%
+again, and the check flags all of them.
 
 ### Private corpus (experiments 1–4 and the fine-tune)
 
@@ -191,26 +203,28 @@ Results, briefly:
 - **Clean cost.** Recall@5 was unchanged (0.553 with and without the shield). MRR went from 0.753 to 0.733. The shield
   added 3 ms per query (p50, CPU).
 - **Delta scoring on 10 held-out documents.** Attack edits flagged went from 23% (off-the-shelf, 4.8% of benign edits)
-  to 98.4% with v1 (3.2% of benign edits) and 98.4% with v2 (0 of 62 benign edits).
+  to 98.4% with v1 (3.2%), 98.4% with v2 (0 of 62 benign edits) and 97.6% with v3 (3.2%), with thresholds calibrated per
+  model on benign edits. At the shipped thresholds, which are what a user gets: 61.6% (25.8%) off-the-shelf, 95.2% (11.3%)
+  v1, 96.8% (11.3%) v2 and 94.4% (12.9%) v3. v3 never saw any of this corpus.
 - **PoisonedRAG.** PoisonedRAG texts contain no instructions, so the classifier can't help; the trust tier and the
   outlier model are the controls. Qwen3-4B answered from the top 5 passages, and "attack success" means the planted
-  wrong answer appeared in its answer. In brackets: how often it stated that answer flatly, without calling it
+  wrong answer appeared in its answer as whole words. In brackets: how often it stated that answer flatly, without calling it
   unverified.
 
   | Poison arrives as | No shield | Flagged, flag not shown to the model | Flagged, flag shown to the model | Shipped: low-trust outliers dropped |
   |---|---|---|---|---|
   | Low-trust upload, on-topic (our 26 false statements) | 92% | 12% | 12% (0%) | 8% |
-  | Low-trust upload, off-topic (50 PoisonedRAG NQ targets) | 98% | 84% | 82% (4%) | **0%** |
-  | Trusted new page (ours / NQ) | 92% / 98% | 92% / 98% | 92% / 98% (92% / 88%) | 92% / 98% |
-  | Trusted page edit (ours / NQ) | 88% / 98% | 77% / 98% | 69% / 98% (62% / 92%) | 77% / 98% |
+  | Low-trust upload, off-topic (50 PoisonedRAG NQ targets) | 98% | 84% | 80% (2%) | **0%** |
+  | Trusted new page (ours / NQ) | 92% / 98% | 92% / 98% | 92% / 96% (92% / 86%) | 92% / 98% |
+  | Trusted page edit (ours / NQ) | 88% / 96% | 77% / 96% | 69% / 96% (62% / 90%) | 77% / 96% |
 
   - **A flag on its own changes nothing.** The off-topic poison was flagged every time, but the flag sits in the
     metadata. Unless the application puts it in the prompt, the model never sees it (84%).
   - **Showing the flag changes how the model answers, not what it answers.** Told to treat flagged passages as
-    unverified, it still repeated the planted answer 82% of the time, but stated it flatly only 4% of the time. That
+    unverified, it still repeated the planted answer 80% of the time, but stated it flatly only 2% of the time. That
     helps a person reading the answer; it doesn't help an agent acting on it. No clean answer was hedged (0 of 76), and
     accuracy on our clean questions went from 50% to 46% (one question).
-  - **The model doesn't doubt trusted sources.** Trusted pages flagged as outliers were still stated flatly 88–92% of
+  - **The model doesn't doubt trusted sources.** Trusted pages flagged as outliers were still stated flatly 86–92% of
     the time with the flag showing.
   - **Dropping works where the source is low-trust.** That's why the shipped policy drops low-trust outliers: the
     off-topic poison reaches the top 5 in 0 of 50 cases (before: 43) and attack success is 0%. Adding the labels on
@@ -256,7 +270,8 @@ shows v1 has the same problem with how-to text.
 - The calibrated `delta_injection` threshold is the 1 − target FPR quantile of benign edits.
   - With 63 calibration edits and the off-the-shelf classifier, that quantile is about 1.0. So for the base model the
     injection channel is effectively off, and its delta-scoring gain comes from the off-topic score alone.
-  - The fine-tuned model separates the two, so its threshold is informative.
+  - The fine-tuned models separate the two, but their calibrated thresholds are very low (0.0005–0.014) and come from
+    only 63 edits. Use the shipped-threshold numbers to judge what a user gets.
 - `tpr_at_1pct_fpr` is only reported when the negative set has at least 100 items.
 
 ## Data
