@@ -89,7 +89,7 @@
     <article>
       <h3>A compromised trusted page</h3>
       <p>An approved wiki page is edited. Signing can't help, because the page really is from your wiki.</p>
-      <p class="result"><strong>Delta scoring isolates the edit.</strong> With our fine-tuned classifier, 95% of poisoned edits were flagged on public docs it never saw.</p>
+      <p class="result"><strong>Delta scoring isolates the edit.</strong> With our fine-tuned classifier, 93–95% of poisoned edits were flagged on public docs it never saw.</p>
     </article>
   </div>
   <figure class="diff">
@@ -157,12 +157,12 @@ shield.ingest(<span class="str">"wiki/vpn-keys"</span>, page_text,
   <div class="ruled four stats">
     <div><p class="big">125<span>/125</span></p><p>chunks edited in the vector store were dropped</p><p class="base"><span>without</span>all 125 served</p></div>
     <div><p class="big">0<span>/88</span></p><p>low-trust poisoned chunks were served without a warning</p><p class="base"><span>without</span>88 of 88</p></div>
-    <div><p class="big">95<span>%</span></p><p>of poisoned edits to a trusted page flagged, at 6.4% false alarms</p><p class="base"><span>off-the-shelf classifier</span>46% flagged</p></div>
+    <div><p class="big">95<span>%</span></p><p>of poisoned edits to a trusted page flagged, at 8.8% false alarms</p><p class="base"><span>off-the-shelf classifier</span>46% flagged</p></div>
     <div><p class="big">3<span> ms</span></p><p>added per retrieval on a CPU</p><p class="base"><span>retrieval quality</span>recall@5 unchanged</p></div>
   </div>
   <p class="fine note">Measured on a 35-document synthetic security corpus with 125 published attacks from Microsoft's BIPIA benchmark (MIT).
-    The trusted-page figure is from Docker's public documentation (8,765 chunks) and BIPIA test attacks, none of which our fine-tuned classifier saw in training.
-    On MITRE ATT&amp;CK pages it flagged 97% at 9.6% false alarms. The fine-tuned classifier isn't part of the open-source SDK yet.
+    The trusted-page figure is from Microsoft 365's admin documentation (3,172 chunks) and BIPIA test attacks, none of which our fine-tuned classifier saw in training.
+    On Docker's documentation it flagged 93% at 5.6% false alarms. Attacks written as ordinary notes are harder for it. The fine-tuned classifier isn't part of the open-source SDK yet.
     Full methodology will be published with the SDK.</p>
 </section>
 
@@ -234,7 +234,7 @@ shield.ingest(<span class="str">"wiki/vpn-keys"</span>, page_text,
   <h2>Questions</h2>
   <div class="faq-list">
     <details><summary>Does my data leave my network?</summary><p>No. The SDK, the detectors and the provenance ledger run in your environment. The hosted dashboard stores chunk IDs, scores and provenance metadata, not text, unless you turn on previews.</p></details>
-    <details><summary>Isn't a prompt-injection classifier enough?</summary><p>On our security corpus, an off-the-shelf classifier separated attacks from normal logs and incident reports barely better than chance (AUROC 0.54). On Docker's public docs, delta scoring with that classifier flagged 46% of poisoned edits; with our fine-tuned classifier, 95%. Our first fine-tune scored nearly half of how-to docs as attacks, so we retrained it and retested on docs it had never seen. Provenance, delta scoring and testing on content like your own are what make detection usable.</p></details>
+    <details><summary>Isn't a prompt-injection classifier enough?</summary><p>On our security corpus, an off-the-shelf classifier separated attacks from normal logs and incident reports barely better than chance (AUROC 0.54). On public how-to docs, delta scoring with that classifier flagged 46% of poisoned edits; with our fine-tuned classifier, 93–95%. Our first fine-tune scored nearly half of how-to docs as attacks, so we retrained it and retested on docs it had never seen. Provenance, delta scoring and testing on content like your own are what make detection usable.</p></details>
     <details><summary>Will it delete legitimate content?</summary><p>Never on a detector score alone for trusted sources. Suspicious trusted content is served with a warning and goes to a human review queue.</p></details>
     <details><summary>What happens during an incident?</summary><p>A lockdown switch serves only verified chunks with no warnings at all while you investigate.</p></details>
     <details><summary>Which stacks are supported?</summary><p>Python RAG pipelines. LangChain, LlamaIndex, ChromaDB and pgvector adapters are planned for the first release.</p></details>
