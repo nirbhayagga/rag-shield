@@ -28,7 +28,7 @@ class Policy:
     lockdown: bool = False          # incident kill switch: serve only verified chunks with no warning at all
     hidden_check: bool = True       # flag invisible, tag and look-alike characters (the classifier always scores cleaned text)
     # Low-trust content that looks unlike anything in the trusted corpus is dropped, not just flagged. In the PoisonedRAG
-    # experiment, off-topic poison that was flagged but still reached the model worked 84% of the time, and 82% when the model
+    # experiment, off-topic poison that was flagged but still reached the model worked 84% of the time, and 80% when the model
     # was shown the flag (it hedged, but repeated the false answer). Dropped, it worked 0% of the time.
     outlier_block_tiers: tuple = ('low',)
 
