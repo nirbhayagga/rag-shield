@@ -11,7 +11,7 @@ HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE / 'vendor'))
 
 from ragshield import chunking  # noqa: E402
-from ragshield.detectors import OutlierDetector  # noqa: E402
+from ragshield.detectors import CombinedInjection, OutlierDetector  # noqa: E402
 from ragshield.index import VectorIndex  # noqa: E402
 from ragshield.provenance import Ledger, Signer  # noqa: E402
 from ragshield.shield import Shield  # noqa: E402
@@ -257,6 +257,20 @@ class FloodTests(unittest.TestCase):
         shield.ingest('note', 'vpn setup guide', 'wiki', 'high')
         self.assertEqual(len(shield.retrieve('vpn setup guide', 3)), 1)
         self.assertNotIn('starved', [e[2] for e in shield.events])
+
+
+class CombinedInjectionTests(unittest.TestCase):
+    class Fixed:
+        def __init__(self, name, scores):
+            self.name, self.scores = name, np.array(scores, np.float32)
+
+        def score(self, texts):
+            return self.scores[:len(texts)]
+
+    def test_a_chunk_is_flagged_if_any_classifier_fires(self):
+        combined = CombinedInjection([self.Fixed('a', [0.1, 0.9, 0.2]), self.Fixed('b', [0.7, 0.1, 0.3])])
+        self.assertEqual(combined.name, 'a+b')
+        np.testing.assert_allclose(combined.score(['x', 'y', 'z']), [0.7, 0.9, 0.3])
 
 
 if __name__ == '__main__':

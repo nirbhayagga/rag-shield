@@ -14,6 +14,10 @@ Data (no new attack content is written; attacks are inserted unchanged):
              attacks are also inserted into these pages, so "a command in a runbook" and "an attack in a runbook" both
              appear. A corpus used here is in-domain afterwards: test on one that wasn't (docker for how-to text)
   optional   --public-only drops the Vandelay text, so the training data is all public and the weights can be published
+  optional   --note-attacks N adds N attacks written as ordinary emails and notes (LLMail-Inject phase 1, MIT), because BIPIA's attacks
+             read like commands. Benign emails from the same dataset and NotInject (MIT, harmless text with trigger words) are
+             added as negatives, so "reads like a note" doesn't become the signal. The challenge's fixed target address and
+             word are replaced by neutral ones, or the model would just learn those. LLMail phase 2 is held out for the report
 Leakage controls:
   - Vandelay is split BY DOCUMENT (data/splits.json, reused if present): training never sees a test document
   - BIPIA train items train; BIPIA test items are only used for the final report
@@ -26,13 +30,16 @@ results/finetune_<name>.json.
   python finetune_injection.py --device cuda --deepset --public-negatives k8s --name ragshield-injection-v2
   python finetune_injection.py --device cuda --deepset --public-only --public-negatives k8s attack --name ragshield-injection-v3
   python finetune_injection.py --device cuda --deepset --public-only --public-negatives k8s attack --test-corpus docker   # no private data needed
+  python finetune_injection.py --device cuda --deepset --public-only --public-negatives k8s attack --note-attacks 150 --name ragshield-injection-v4
   python finetune_injection.py --device cuda --precision fp16 --batch 8 --grad-accum 2   # RTX 2080 (no fast bf16)
   python finetune_injection.py --dry-run                     # CPU smoke test of the whole pipeline"""
 import argparse
 import json
 import math
 import random
+import re
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -58,6 +65,7 @@ parser.add_argument('--public-negatives', nargs='*', default=[], choices=PUBLIC_
 parser.add_argument('--public-units', type=int, default=1200,
                     help='per public corpus: training negatives sampled, a third each chunks, paragraphs and sentences')
 parser.add_argument('--public-only', action='store_true', help='train on --public-negatives only, with no private text')
+parser.add_argument('--note-attacks', type=int, default=0, help='also train on this many note-style attacks from LLMail-Inject (see above)')
 parser.add_argument('--test-corpus', default=None, choices=PUBLIC_CORPORA, help='report on this public corpus instead of the private test documents')
 parser.add_argument('--seed', type=int, default=13)
 parser.add_argument('--dry-run', action='store_true')
@@ -189,6 +197,62 @@ for part in ('train', 'test') if args.deepset else ('test',):
     else:
         test_sets['deepset_in_domain' if args.deepset else 'deepset_out_of_domain'] = rows
 
+LLMAIL, LLMAIL_REV = 'microsoft/llmail-inject-challenge', '1063bdf01ec8762b812d5e06ee768a06faa5a6f7'
+NOTINJECT, NOTINJECT_REV = 'leolee99/NotInject', '847ae76cf8fea5ed325429e569ae8cfef022d2e0'
+MACHINE_TEXT = re.compile(r'</?\|?[a-zA-Z_]+\|?>|\[/?[A-Z_ ]{3,}\]|```|\\n')  # chat markup, tool tags and code fences don't read like a note
+TARGET_ADDRESS = re.compile(r'contact\s*(@|\(at\)|\bat\b)\s*contact\s*(\.|\bdot\b)\s*com', re.I)
+TARGET_WORD = re.compile(r'\bconfirmation\b', re.I)
+ADDRESSES = ('it-help@example.org', 'reports@example.net', 'archive@example.com', 'ops-desk@example.org', 'audit@example.net')
+WORDS = ('received', 'approved', 'acknowledged', 'noted', 'complete', 'verified')
+
+
+def email_body(text):
+    return text.split('Body:', 1)[-1].strip()
+
+
+def note_attacks(phase, exclude=()):
+    """Attack emails from LLMail-Inject that read like ordinary notes, one per near-duplicate family, in a fixed order."""
+    labelled = json.loads(Path(hf_hub_download(LLMAIL, f'data/labelled_unique_submissions_{phase}.json', repo_type='dataset', revision=LLMAIL_REV)).read_text())
+    out, seen = [], set(exclude)
+    for text, label in sorted(labelled.items()):
+        body = email_body(text)
+        key = re.sub('[^a-z]', '', body.lower())[:80]
+        readable = body.isascii() and sum(c.isalpha() or c.isspace() for c in body) >= 0.9 * len(body) and not MACHINE_TEXT.search(body)
+        if str(label.get('attack_attempt')) != 'True' or not 80 <= len(body) <= 1500 or not readable or key in seen:
+            continue
+        seen.add(key)
+        picks = random.Random(key)
+        body = TARGET_ADDRESS.sub(picks.choice(ADDRESSES), body)
+        out.append({'text': TARGET_WORD.sub(picks.choice(WORDS), body), 'key': key})
+    return out
+
+
+def benign_notes():
+    emails = json.loads(Path(hf_hub_download(LLMAIL, 'data/emails_for_fp_tests.json', repo_type='dataset', revision=LLMAIL_REV)).read_text())
+    triggers = [str(t) for part in ('one', 'two', 'three')
+                for t in pd.read_parquet(hf_hub_download(NOTINJECT, f'data/NotInject_{part}-00000-of-00001.parquet', repo_type='dataset', revision=NOTINJECT_REV))['prompt']]
+    return [(email_body(e), 'email') for e in emails] + [(t, 'trigger_words') for t in triggers]
+
+
+note_counts = {}
+if args.note_attacks:  # like the public negatives: nothing here touches rng unless the flag is set
+    train_pool = note_attacks('phase1')
+    notes = rng.sample(train_pool, min(args.note_attacks, len(train_pool)))
+    n_val_notes = max(1, round(len(notes) * 0.15))
+    train_set += positives(notes[n_val_notes:], host_chunks, host_sents, rng, args.hosts_per_attack)
+    val_set += positives(notes[:n_val_notes], host_chunks, host_sents, rng, 1)
+    benign = benign_notes()
+    rng.shuffle(benign)
+    n_test, n_val_benign = round(len(benign) * 0.3), max(1, round(len(benign) * 0.1))
+    held_benign, val_benign, fit_benign = benign[:n_test], benign[n_test:n_test + n_val_benign], benign[n_test + n_val_benign:]
+    val_set += [(t, 0, kind) for t, kind in val_benign]
+    train_set += [(t, 0, kind) for t, kind in fit_benign]
+    held_notes = note_attacks('phase2', exclude={n['key'] for n in train_pool})
+    held_notes = rng.sample(held_notes, min(300, len(held_notes)))
+    test_sets['notes_out_of_domain'] = [(n['text'], 1, 'delta') for n in held_notes] + [(t, 0, kind) for t, kind in held_benign]
+    note_counts = {'phase1_available': len(train_pool), 'phase1_used': len(notes), 'phase2_held_out': len(held_notes),
+                   'benign_fit': len(fit_benign), 'benign_val': len(val_benign), 'benign_held_out': len(held_benign)}
+
 if args.dry_run:
     train_set = rng.sample(train_set, 32)
     val_set = rng.sample(val_set, 16)
@@ -286,7 +350,7 @@ result = {
     'data': {'train_examples': len(train_set), 'val_examples': len(val_set), 'train_docs': len(train_ids), 'test_docs': len(test_docs),
              'bipia_train_items_fit': len(fit_attacks), 'bipia_train_items_val': len(val_attacks), 'bipia_test_items': len(test_attacks),
              'deepset': args.deepset, 'public_negatives': public_counts, 'public_only': args.public_only,
-             'test_corpus': args.test_corpus or 'data/splits.json test documents'},
+             'note_attacks': note_counts, 'test_corpus': args.test_corpus or 'data/splits.json test documents'},
     'history': history, 'train_minutes': round((time.time() - t0) / 60, 1),
     'test_base': base_report, 'test_finetuned': tuned_report,
 }
@@ -294,11 +358,14 @@ name = 'finetune_dryrun.json' if args.dry_run else f'finetune_{args.name}.json'
 (HERE / 'results' / name).write_text(json.dumps(result, indent=2))
 if not args.dry_run:
     (out_dir / 'README.md').write_text(
+        (f"---\nlicense: apache-2.0\nbase_model: {args.base}\ntags: [prompt-injection, rag, security]\n---\n\n" if args.public_only else '') +
         f"# {args.name}\n\nFine-tuned from `{args.base}` (Apache-2.0) for RAG Shield. Training data: BIPIA train-split attacks (MIT, "
         f"Microsoft) inserted unchanged into "
         f"{'clean pages only' if args.public_only else 'Vandelay text from training documents only'}"
         f"{', plus deepset/prompt-injections train (Apache-2.0)' if args.deepset else ''}"
-        f"{', with clean pages from: ' + '; '.join(PUBLIC_SOURCES[c] for c in args.public_negatives) if args.public_negatives else ''}. "
+        f"{', with clean pages from: ' + '; '.join(PUBLIC_SOURCES[c] for c in args.public_negatives) if args.public_negatives else ''}"
+        f"{', plus LLMail-Inject (MIT, Microsoft) note-style attacks with the fixed target address and word replaced, its benign emails, and NotInject (MIT)' if args.note_attacks else ''}. "
         f"Labels: 0 SAFE, 1 INJECTION.\n"
-        f"Evaluated on {args.test_corpus or 'held-out documents (' + ', '.join(sorted(test_docs)) + ')'} with BIPIA test-split attacks; see results/{name}.\n")
+        f"Evaluated on {'held-out documents' if args.public_only and not args.test_corpus else args.test_corpus or 'held-out documents (' + ', '.join(sorted(test_docs)) + ')'} with BIPIA test-split attacks; see results/{name}.\n"
+        f"A flag is a signal for review, not proof of an attack. Test it on content like your own before relying on it.\n")
 print(json.dumps({'test_base': base_report, 'test_finetuned': tuned_report}, indent=1))

@@ -32,6 +32,17 @@ class InjectionDetector:
         return out
 
 
+class CombinedInjection:
+    """Several classifiers as one: the highest score wins, so a chunk is flagged if any of them fires."""
+
+    def __init__(self, detectors):
+        self.detectors = list(detectors)
+        self.name = '+'.join(d.name for d in self.detectors)
+
+    def score(self, texts):
+        return np.max([d.score(texts) for d in self.detectors], axis=0)
+
+
 class OutlierDetector:
     """Local Outlier Factor over embeddings of trusted content. The threshold is set from held-out trusted chunks
     (k-fold), so the false-positive rate on clean data is estimated honestly rather than on the fitting data."""
