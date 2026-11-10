@@ -89,7 +89,7 @@
     <article>
       <h3>A compromised trusted page</h3>
       <p>An approved wiki page is edited. Signing can't help, because the page really is from your wiki.</p>
-      <p class="result"><strong>Delta scoring isolates the edit.</strong> With our fine-tuned classifier, 93–95% of poisoned edits were flagged on public docs it never saw.</p>
+      <p class="result"><strong>Delta scoring isolates the edit.</strong> With our fine-tuned classifier, 93–95% of edits that plant instructions were flagged on public docs it never saw.</p>
     </article>
   </div>
   <figure class="diff">
@@ -157,8 +157,8 @@ shield.ingest(<span class="str">"wiki/vpn-keys"</span>, page_text,
   <div class="ruled four stats">
     <div><p class="big">125<span>/125</span></p><p>chunks edited in the vector store were dropped</p><p class="base"><span>without</span>all 125 served</p></div>
     <div><p class="big">0<span>/88</span></p><p>low-trust poisoned chunks were served without a warning</p><p class="base"><span>without</span>88 of 88</p></div>
-    <div><p class="big">95<span>%</span></p><p>of poisoned edits to a trusted page flagged, at 8.8% false alarms</p><p class="base"><span>off-the-shelf classifier</span>46% flagged</p></div>
-    <div><p class="big">3<span> ms</span></p><p>added per retrieval on a CPU</p><p class="base"><span>retrieval quality</span>recall@5 unchanged</p></div>
+    <div><p class="big">95<span>%</span></p><p>of edits planting instructions in a trusted page flagged, at 8.8% false alarms</p><p class="base"><span>off-the-shelf classifier</span>46% flagged</p></div>
+    <div><p class="big">3<span> ms</span></p><p>added per retrieval on a CPU</p><p class="base"><span>on clean questions</span>recall@5 unchanged</p></div>
   </div>
   <p class="fine note">Measured on a 35-document synthetic security corpus with 125 published attacks from Microsoft's BIPIA benchmark (MIT).
     The trusted-page figure is from Microsoft 365's admin documentation (3,172 chunks) and BIPIA test attacks, none of which our fine-tuned classifier saw in training.
