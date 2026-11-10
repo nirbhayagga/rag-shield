@@ -16,7 +16,7 @@ warning and sent to a review queue. Everything runs locally: no text leaves your
 | Hidden characters | `ragshield/hidden.py` | Finds invisible, tag, direction-control and look-alike characters; the classifier scores the cleaned text and the finding is its own reason. Ordinary multilingual text and emoji are left alone |
 | Detectors | `ragshield/detectors.py` | Injection classifier (ProtectAI DeBERTa-v3 by default) and an embedding-outlier model (LOF over bge-base) |
 | Trust filter | `ragshield/shield.py` | Verifies each retrieved chunk, drops tampered/unknown/quarantined chunks, warns and queues suspicious trusted content, re-ranks by similarity × trust; `lockdown` kill switch |
-| Index | `ragshield/index.py` | Minimal cosine index with a small adapter surface (add / search / get / set_text) |
+| Index | `ragshield/index.py`, `ragshield/adapters.py` | Built-in cosine index, or adapters for ChromaDB and pgvector |
 
 The policy is deliberately asymmetric:
 
@@ -64,6 +64,26 @@ for when, chunk_id, action, reason in shield.events:                      # the 
 
 Trust tiers are `high`, `medium` and `low`. `Policy` (in `shield.py`) holds every threshold. Call
 `shield.fit_outlier()` once the trusted corpus is ingested to turn on the outlier model.
+
+### Use your own vector database
+
+`ChromaIndex` and `PgVectorIndex` replace `VectorIndex`; nothing else changes. Your vectors and text stay in your database and
+the ledger stays separate, so text written or changed directly in the database is dropped at retrieval. Existing content has to
+go through `shield.ingest` once to get signed.
+
+```python
+# pip install "rag-shield[chroma]"
+import chromadb
+from ragshield.adapters import ChromaIndex
+index = ChromaIndex(chromadb.PersistentClient('chroma-db'), 'docs')
+
+# pip install "rag-shield[pgvector]"
+import psycopg
+from ragshield.adapters import PgVectorIndex
+index = PgVectorIndex(psycopg.connect('postgresql://localhost/app', autocommit=True), table='ragshield_chunks', dim=768)
+```
+
+The adapters check the chunk's text, not its vector: changing only a stored vector can move a chunk up or down the ranking.
 
 ### Scan your own corpus (index exposure report)
 
@@ -202,6 +222,8 @@ Results, briefly:
 
 - **Clean cost.** Recall@5 was unchanged (0.553 with and without the shield). MRR went from 0.753 to 0.733. The shield
   added 3 ms per query (p50, CPU).
+- **Direct edits to the store.** Overwriting the text of 125 stored chunks with the 125 BIPIA test attacks, bypassing
+  ingestion, failed the signature check 125 times out of 125. The shield drops any chunk that fails that check.
 - **Delta scoring on 10 held-out documents.** Attack edits flagged went from 23% (off-the-shelf, 4.8% of benign edits)
   to 98.4% with v1 (3.2%), 98.4% with v2 (0 of 62 benign edits) and 97.6% with v3 (3.2%), with thresholds calibrated per
   model on benign edits. At the shipped thresholds, which are what a user gets: 61.6% (25.8%) off-the-shelf, 95.2% (11.3%)
@@ -299,7 +321,7 @@ shows v1 has the same problem with how-to text.
 - A trusted chunk with hidden characters is served as stored, with a warning. The shield labels it but doesn't rewrite
   it, because the signature covers the original text. An application that wants the cleaned text can call
   `hidden.clean()`.
-- ChromaDB and pgvector adapters, a review dashboard and reviewer summaries are planned.
+- A review dashboard and reviewer summaries are planned.
 - Benign edits in the delta experiments are built from other documents of the same type. That is probably *harder*
   (more off-topic) than real edits, so the false-alarm rate is a conservative estimate.
 
