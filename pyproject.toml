@@ -29,6 +29,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+chroma = ["chromadb>=1"]
+pgvector = ["psycopg[binary]>=3.2", "pgvector>=0.5"]
 # Only the benchmark scripts in experiments/ need these.
 experiments = [
   "pandas>=2",
