@@ -109,7 +109,7 @@ git clone https://github.com/nirbhayagga/rag-shield.git && cd rag-shield
 python3.12 -m venv .venv
 .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
 .venv/bin/pip install -e ".[experiments]"
-.venv/bin/python -m unittest discover -s tests        # 37 tests, no model downloads (one needs the private corpus)
+.venv/bin/python -m unittest discover -s tests        # no model downloads; some tests skip without the private corpus, ChromaDB or Postgres
 ```
 
 CI (`.github/workflows/tests.yml`) runs the tests on Python 3.10 and 3.12, builds the package and installs the wheel.
@@ -121,8 +121,8 @@ Every attack comes from a published set and is inserted unchanged:
 - [BIPIA](https://github.com/microsoft/BIPIA) test attacks: 125 indirect prompt injections, MIT
 - [PoisonedRAG](https://github.com/sleeepeer/PoisonedRAG) adversarial texts, MIT
 
-The detection claims are scored on data the classifier never saw. BIPIA's train and test attacks share no categories
-and no strings. Model calls are cached in `results/cache/` by model
+The detection claims are scored on data the classifier never saw. BIPIA's train and test attacks share no strings,
+and only one of their 15 categories (Language Translation) appears in both. Model calls are cached in `results/cache/` by model
 and text hash, so reruns and policy sweeps are fast. Outputs go to `results/`, which is gitignored because the files
 quote corpus text.
 
