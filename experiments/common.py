@@ -177,12 +177,13 @@ class CachedInjection:
         return np.array([self.cache[k] for k in keys], dtype=np.float32)
 
 
-OUTCOMES = ('served_silently', 'served_with_warning', 'dropped', 'outranked')
+OUTCOMES = ('served_silently', 'served_with_warning', 'dropped', 'outranked', 'held')
 
 
 def outcome(shield, cid, hits):
     """What happened to chunk cid under the shield: served (silently or with a warning), dropped by the filter, or
-    outranked (kept, but pushed below the top k by the trust weight). 'suppressed' in older results = dropped + outranked."""
+    outranked (kept, but pushed below the top k by the trust weight). 'held' (the edit is waiting for review) is set by
+    the caller. 'suppressed' = dropped + outranked + held; older results have no held."""
     if cid in hits:
         return 'served_silently' if hits[cid]['trust']['action'] == 'pass' else 'served_with_warning'
     text = shield.index.texts[shield.index.ids.index(cid)]
@@ -191,7 +192,7 @@ def outcome(shield, cid, hits):
 
 def outcome_counts(outcomes, n):
     counts = {o: sum(x == o for x in outcomes) for o in OUTCOMES}
-    counts['suppressed'] = counts['dropped'] + counts['outranked']
+    counts['suppressed'] = counts['dropped'] + counts['outranked'] + counts['held']
     counts['silent_attack_success_rate'] = round(counts['served_silently'] / max(1, n), 4)
     return counts
 

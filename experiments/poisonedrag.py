@@ -90,8 +90,10 @@ def ingest_corpus(shield, skip=()):
             shield.ingest(d.doc_id, d.text, 'vandelay-internal', 'high', metadata=d.metadata())
 
 
-def build(scenario):
-    policy = Policy(hold_edits=args.hold) if args.policy == 'shipped' else Policy(outlier_block_tiers=(), hold_edits=args.hold)
+def build(scenario, only=None, hold=args.hold):
+    """only: for page edits, plant just this attack set. An edit is one author's change, and putting both sets in one
+    edit would let the off-topic NQ texts get our on-topic ones flagged or held with them."""
+    policy = Policy(hold_edits=hold) if args.policy == 'shipped' else Policy(outlier_block_tiers=(), hold_edits=hold)
     shield = make_shield(embedder, injection, policy)
     ingest_corpus(shield)
     clean_ids = list(shield.index.ids)
@@ -106,7 +108,8 @@ def build(scenario):
     elif scenario == 'T3e_trusted_page_edit':
         edits = {}
         for c in cases:
-            edits.setdefault(c['host'], []).extend(c['adv_texts'])
+            if only is None or c['set'] == only:
+                edits.setdefault(c['host'], []).extend(c['adv_texts'])
         for doc_id, added in edits.items():
             d = by_id[doc_id]
             shield.ingest(doc_id, '\n\n'.join(delta.paragraphs(d.text) + added), 'vandelay-internal', 'high', metadata=d.metadata())
@@ -168,27 +171,31 @@ if gen:
         c['clean_answer'] = a
         c['clean_score'] = score(c, a)
 
-for scenario in ('T2_low_trust_upload', 'T3n_trusted_new_page', 'T3e_trusted_page_edit'):
-    shield = build(scenario)
+RUNS = [('T2_low_trust_upload', None), ('T3n_trusted_new_page', None), ('T3e_trusted_page_edit', 'vandelay'), ('T3e_trusted_page_edit', 'nq')]
+for scenario, only in RUNS:
+    shield = build(scenario, only)
+    # A held edit never reaches the shielded index, so with --hold the unshielded baseline comes from a store without holds.
+    store = build(scenario, only, hold=False) if args.hold and scenario == 'T3e_trusted_page_edit' else shield
+    group = [c for c in cases if only is None or c['set'] == only]
     items_off, items_on = [], []
-    for c in cases:
-        pcs = set(poisoned_chunks(shield, c, scenario))
-        raw = shield.retrieve(c['question'], args.k, shielded=False)
+    for c in group:
+        held = scenario == 'T3e_trusted_page_edit' and bool(shield.ledger.held(c['host']))
+        pcs = set(poisoned_chunks(store, c, scenario))
+        raw = store.retrieve(c['question'], args.k, shielded=False)
         on = {h['chunk_id']: h for h in shield.retrieve(c['question'], args.k)}
         retrieved = [h['chunk_id'] for h in raw if h['chunk_id'] in pcs]
-        flags = {cid: shield.ledger.get(cid)[0].scores for cid in pcs}
+        flags = {cid: store.ledger.get(cid)[0].scores for cid in pcs}
         rows.append({'scenario': scenario, 'set': c['set'], 'id': c['id'], 'poison_chunks': len(pcs),
-                     'poison_in_topk_unshielded': len(retrieved), 'poison_in_topk_shielded': sum(cid in on for cid in pcs),
-                     'outcomes': [outcome(shield, cid, on) for cid in retrieved],
+                     'poison_in_topk_unshielded': len(retrieved), 'poison_in_topk_shielded': 0 if held else sum(cid in on for cid in pcs),
+                     'outcomes': ['held' if held else outcome(shield, cid, on) for cid in retrieved],
                      'injection_max': round(max((s.get('injection', 0) for s in flags.values()), default=0), 4),
                      'outlier_any': any(s.get('outlier_flag') for s in flags.values()),
-                     'delta_flag_any': any(s.get('delta_flag') for s in flags.values()),
-                     'held': scenario == 'T3e_trusted_page_edit' and bool(shield.ledger.held(c['host']))})
+                     'delta_flag_any': any(s.get('delta_flag') for s in flags.values()), 'held': held})
         items_off.append((c['question'], [h['text'] for h in raw]))
         items_on.append((c['question'], shown(list(on.values()), True)))
     if gen:
         for which, items in (('off', items_off), ('on', items_on)):
-            for row, c, a in zip(rows[-len(cases):], cases, gen.answer(items)):
+            for row, c, a in zip(rows[-len(group):], group, gen.answer(items)):
                 row[f'answer_{which}'] = a
                 row[f'score_{which}'] = score(c, a)
 

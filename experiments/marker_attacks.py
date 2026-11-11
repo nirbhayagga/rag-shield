@@ -69,8 +69,8 @@ def question(doc):
     return f'What does the document "{doc.title}" say?'
 
 
-def corpus_shield():
-    shield = make_shield(embedder, injection, Policy(hold_edits=args.hold))
+def corpus_shield(hold=args.hold):
+    shield = make_shield(embedder, injection, Policy(hold_edits=hold))
     for d in docs:
         shield.ingest(d.doc_id, d.text, SOURCE, TIER, metadata=d.metadata())
     return shield, list(shield.index.ids)
@@ -85,22 +85,26 @@ def shown(hits):
     return [(label(h), h['text']) if args.labels else h['text'] for h in hits]
 
 
-def measure(shield, scenario, attack, style, host, doc_id):
-    """Retrieval and detection for one planted note; the generator runs later on the stored passages."""
+def measure(shield, scenario, attack, style, host, doc_id, store=None):
+    """Retrieval and detection for one planted note; the generator runs later on the stored passages.
+
+    store: the same corpus without holds. A held edit never reaches the shielded index, so the unshielded baseline and
+    the note's chunks come from there."""
+    store = store or shield
     q = question(host)
-    cids = note_chunks(shield, doc_id, attack['text'])
-    scores = [shield.ledger.get(cid)[0].scores for cid in cids]
-    holds = shield.ledger.held(doc_id)  # a held edit isn't in the index, so its scores come from the hold
-    if holds:
+    cids = note_chunks(store, doc_id, attack['text'])
+    scores = [store.ledger.get(cid)[0].scores for cid in cids]
+    holds = shield.ledger.held(doc_id)
+    if holds:  # the hold records what each added passage scored
         added = holds[0]['additions']
         scores = [{'delta': {'injection': max(a['injection'] for a in added), 'offtopic': max(a['offtopic'] for a in added)}, 'delta_flag': True}]
-    raw = shield.retrieve(q, args.k, shielded=False)
+    raw = store.retrieve(q, args.k, shielded=False)
     hits = shield.retrieve(q, args.k)
     on = {h['chunk_id']: h for h in hits}
     reached = [cid for cid in cids if cid in {h['chunk_id'] for h in raw}]
     return {'scenario': scenario, 'attack': attack['id'], 'style': style, 'host': host.doc_id, 'marker': attack['marker'],
             'note_chunks': len(cids), 'reached_top_k': bool(reached),
-            'outcome': outcome(shield, reached[0], on) if reached else None,
+            'outcome': ('held' if holds else outcome(shield, reached[0], on)) if reached else None,
             'injection_ge_0.5': any(s.get('injection', 0) >= 0.5 for s in scores),
             'delta_injection': max((s['delta']['injection'] for s in scores if 'delta' in s), default=None),
             'delta_offtopic': max((s['delta']['offtopic'] for s in scores if 'delta' in s), default=None),
@@ -122,15 +126,21 @@ for attack in notes:
         shield.fit_outlier(fit_ids=clean_ids)
         rows += [measure(shield, 'T2_low_trust_copy', attack, style, host, f'copy-{host.doc_id}') for host in hosts]
 
-# T3e: edit a trusted page, measure, restore it.
+# T3e: edit a trusted page, measure, restore it. With --hold, a twin store without holds gives the unshielded baseline.
 shield, _ = corpus_shield()
 shield.fit_outlier()
+store = None
+if args.hold:
+    store, _ = corpus_shield(hold=False)
+    store.fit_outlier()
 for attack in notes:
     for style in STYLES:
         for host in hosts:
-            shield.ingest(host.doc_id, planted(host, attack['text'], style), SOURCE, TIER, metadata=host.metadata())
-            rows.append(measure(shield, 'T3e_trusted_page_edit', attack, style, host, host.doc_id))
-            shield.ingest(host.doc_id, host.text, SOURCE, TIER, metadata=host.metadata())
+            for s in filter(None, (shield, store)):
+                s.ingest(host.doc_id, planted(host, attack['text'], style), SOURCE, TIER, metadata=host.metadata())
+            rows.append(measure(shield, 'T3e_trusted_page_edit', attack, style, host, host.doc_id, store))
+            for s in filter(None, (shield, store)):
+                s.ingest(host.doc_id, host.text, SOURCE, TIER, metadata=host.metadata())
 
 # Benign strings: the classifier on the string alone, and added to pages as an edit.
 benign_rows = []
