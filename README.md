@@ -4,15 +4,16 @@ Signed provenance, poisoning detection and a retrieval-time trust filter for RAG
 
 RAG Shield sits between your document store and the model. At ingestion it signs every chunk and scores it. At
 retrieval it checks each chunk against its signature and trust tier before the model sees it. Tampered and unknown
-chunks are dropped. Suspicious low-trust content is dropped too, and suspicious trusted content is served with a
-warning and sent to a review queue. Everything runs locally: no text leaves your machine.
+chunks are dropped. Suspicious low-trust content is dropped too. A flagged edit is held for review while the previous
+version keeps serving, and other suspicious trusted content is served with a warning. Everything runs locally: no text
+leaves your machine.
 
 ## How it works
 
 | Stage | Module | What it does |
 |---|---|---|
 | Ingestion signer | `ragshield/provenance.py` | SHA-256 + Ed25519 signature per chunk, SQLite ledger, key revocation, document versions |
-| Delta scoring | `ragshield/delta.py`, `shield.py` | On re-ingestion, isolates new paragraphs (or new sentences in modified paragraphs) and scores only those |
+| Delta scoring | `ragshield/delta.py`, `shield.py` | On re-ingestion, isolates new paragraphs (or new sentences in modified paragraphs) and scores only those. A flagged edit is held until someone approves or rejects it |
 | Hidden characters | `ragshield/hidden.py` | Finds invisible, tag, direction-control and look-alike characters; the classifier scores the cleaned text and the finding is its own reason. Ordinary multilingual text and emoji are left alone |
 | Detectors | `ragshield/detectors.py`, `shield.py` | Injection classifier (ProtectAI DeBERTa-v3 by default), an embedding-outlier model (LOF over bge-base) and a retrieval-frequency probe |
 | Trust filter | `ragshield/shield.py` | Verifies each retrieved chunk, drops tampered/unknown/quarantined chunks, warns and queues suspicious trusted content, re-ranks by similarity × trust; `lockdown` kill switch |
@@ -22,8 +23,10 @@ warning and sent to a review queue. Everything runs locally: no text leaves your
 The policy is deliberately asymmetric:
 
 - Trusted, signed sources are never deleted on a classifier score alone. They get a warning and go to review.
-- Low and medium-trust sources are dropped on a high injection score, on hidden characters, or on a flagged edit
-  (additions that are off-topic, injection-like or full of hidden characters).
+- An edit whose additions are flagged (off-topic, injection-like or full of hidden characters) is held. The previous
+  version keeps serving until a reviewer approves or rejects the new one. Served with a warning instead, an instruction
+  planted in a trusted page still reaches the model, and models often follow it. `Policy.hold_edits = False` turns this off.
+- Low and medium-trust sources are dropped on a high injection score or on hidden characters.
 - Low-trust chunks that the outlier model flags (unlike anything in the trusted corpus) are dropped. A warning only
   reaches the model if the application puts it in the prompt, and even then the model mostly hedges instead of ignoring
   the chunk (see the PoisonedRAG results).
@@ -73,11 +76,27 @@ that land in the top results for an unusual share of them (by default at least 1
 expected share), which is how a chunk written to match many unrelated questions shows up even when its text looks normal.
 Flagged chunks from low-trust sources are dropped; trusted ones get a warning.
 
+### Review held edits
+
+```python
+for hold in shield.held():                     # edits waiting for review, with what each added passage scored
+    print(hold['doc_id'], hold['reason'])
+
+shield.approve('vpn-runbook', hold['text_sha256'], reviewer='alice@example.com')   # serve the new version
+shield.reject('vpn-runbook', hold['text_sha256'], reviewer='alice@example.com')    # or keep the previous one
+shield.quarantine('vpn-runbook::2', reviewer='alice@example.com')                  # stop serving any chunk now
+```
+
+Pass the hash of the version the reviewer read: if the held text no longer matches it, approval is refused, so it
+never covers text nobody saw. The passages a reviewer approved are served without the classifier and edit warnings.
+A rejected edit sent again stays rejected, and a newer version with nothing flagged replaces a held one. A
+quarantined chunk's exact text stays quarantined when the document is ingested again, as nightly syncs do.
+
 ### Try it
 
 `python examples/demo.py` runs a small company wiki through three attacks: an instruction planted in a trusted
-page, a low-trust upload carrying an injection, and a chunk changed directly in the vector store. It prints what the
-vector database returned and what the shield did with each result.
+page (held for review), a low-trust upload carrying an injection, and a chunk changed directly in the vector store. It
+prints what the vector database returned and what the shield did with each result.
 
 ### Use your own vector database
 
@@ -263,7 +282,10 @@ Results, briefly:
   wrong answer appeared in its answer as whole words. In brackets: how often it stated that answer flatly, without calling it
   unverified.
 
-  | Poison arrives as | No shield | Flagged, flag not shown to the model | Flagged, flag shown to the model | Shipped: low-trust outliers dropped |
+  These runs predate holding flagged edits: a flagged trusted edit was served with a warning. With holds, it isn't
+  served until someone approves it.
+
+  | Poison arrives as | No shield | Flagged, flag not shown to the model | Flagged, flag shown to the model | Low-trust outliers dropped |
   |---|---|---|---|---|
   | Low-trust upload, on-topic (our 26 false statements) | 92% | 12% | 12% (0%) | 8% |
   | Low-trust upload, off-topic (50 PoisonedRAG NQ targets) | 98% | 84% | 80% (2%) | **0%** |
@@ -282,8 +304,9 @@ Results, briefly:
     off-topic poison reaches the top 5 in 0 of 50 cases (before: 43) and attack success is 0%. Adding the labels on
     top of that leaves the low-trust rows at 8% (0% stated flatly) and 0%.
   - **On-topic false statements from a trusted editor get through.** They were served silently 72% of the time as new
-    pages (94 of 130 chunks) and 75% as page edits (55 of 73). Signing can't help when the editor is legitimate. That
-    gap needs review of edits by default, or checking claims against the rest of the corpus.
+    pages (94 of 130 chunks) and 75% as page edits (55 of 73). Signing can't help when the editor is legitimate, and
+    holding flagged edits doesn't either, because nothing flags these. That gap needs every trusted edit reviewed, or
+    claims checked against the rest of the corpus.
 
 GPU commands (an RTX 20xx has no fast bf16, so add `--precision fp16 --batch 8 --grad-accum 2` there):
 
@@ -339,9 +362,9 @@ shows v1 has the same problem with how-to text.
 ## Limits
 
 - The ledger is SQLite with a local PEM key. Production needs Postgres and a KMS or HSM.
-- Document version history and detector scores are stored unsigned. The signature covers the chunk's identity, tier,
-  position and hash, so anyone with write access to the ledger can lower a score. Signing verdicts (or tying quarantine
-  to a reviewer) is planned.
+- Document version history, detector scores, held edits and review decisions are stored unsigned. The signature covers
+  the chunk's identity, tier, position and hash, so anyone with write access to the ledger can lower a score or drop a
+  hold. Approval hashes the held text again, so swapping it doesn't get it approved. Signing verdicts is planned.
 - Revoking a key drops every chunk it ever signed. Re-signing on key rotation is not implemented.
 - Low-trust content on a topic the trusted corpus doesn't cover is dropped as an outlier, even when it's benign. It
   stays in the ledger, and re-ingesting it at a higher tier after review serves it. To label such content instead of
