@@ -125,10 +125,12 @@ for case in cases:
     case['scores'] = run(shield, case)
 
 # Both thresholds come from benign calibration edits only, each at half the target rate, so their union stays near it.
+# Scores are stored to 4 decimal places, so a confident classifier scores most benign edits as exactly 0, and a threshold
+# of 0 would flag every edit. Neither threshold goes below the smallest score that isn't 0.
 cal = [c['scores'] for c in cases if c['kind'] == 'benign' and c['half'] == 'calibration']
 calibration = np.array([s['offtopic'] for s in cal])
-threshold = float(np.quantile(calibration, 1 - args.target_fpr / 2))
-inj_threshold = float(np.quantile([s['delta_injection'] for s in cal], 1 - args.target_fpr / 2))
+threshold = max(float(np.quantile(calibration, 1 - args.target_fpr / 2)), 1e-4)
+inj_threshold = max(float(np.quantile([s['delta_injection'] for s in cal], 1 - args.target_fpr / 2)), 1e-4)
 
 # Pass 2: calibrated policy, with retrieval outcomes.
 policy = Policy(delta_offtopic=threshold, delta_injection=inj_threshold, hold_edits=False)
