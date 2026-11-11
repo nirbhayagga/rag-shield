@@ -188,19 +188,23 @@ cd experiments
 ```
 
 **Public corpora** (experiment 6). These runs use every page. v1 and v2 are fine-tuned partly on the private corpus, so
-their weights can't be published. v3 trains only on public data: Kubernetes, ATT&CK, deepset and BIPIA's training attacks
-(`finetune_injection.py --public-only`). A \* marks a corpus that model trained on, so that row isn't a held-out test.
+their weights can't be published. v3 and v5 train only on public data (`finetune_injection.py --public-only`): v3 on
+Kubernetes, ATT&CK, deepset and BIPIA's training attacks, and v5 adds note-style attacks and twice as many Kubernetes and
+ATT&CK passages (below). v5 is the model that ships. A \* marks a corpus that model trained on, so that row isn't a
+held-out test.
 
 | Corpus (chunks) | Classifier | Clean chunks scored as injection (≥ 0.5) | Clean chunks with any warning | Attack pasted into a chunk, caught | Attack added as a page edit, caught | Benign page edits flagged |
 |---|---|---|---|---|---|---|
 | Microsoft 365 admin (3,172) | Off-the-shelf | 1.9% | 3.9% | 7.2% | 46.4% | 10.4% |
 | | v1 | **50.2%** | 51.1% | 99.2% | 97.6% | 35.2% |
 | | v2 | 2.4% | 4.4% | 92.0% | 94.4% | 8.8% |
-| | **v3** | **0.7%** | 2.7% | 88.0% | **95.2%** | 8.8% |
+| | v3 | 0.7% | 2.7% | 88.0% | 95.2% | 8.8% |
+| | **v5** | **0.9%** | **2.9%** | 91.2% | **96.0%** | 9.6% |
 | Docker (8,765) | Off-the-shelf | 1.9% | 3.8% | 5.6% | 45.6% | 12.0% |
 | | v1 | **44.5%** | 45.8% | 97.6% | 96.0% | 26.4% |
 | | v2 | 1.2% | 3.2% | 95.2% | 95.2% | 6.4% |
-| | **v3** | **0.3%** | 2.3% | 90.4% | **92.8%** | 5.6% |
+| | v3 | 0.3% | 2.3% | 90.4% | 92.8% | 5.6% |
+| | **v5** | **0.3%** | **2.4%** | 91.2% | **93.6%** | 4.8% |
 | ATT&CK (1,587) | Off-the-shelf | 2.7% | 4.7% | 13.6% | 74.4% | 12.0% |
 | | v1 | 0.2% | 2.2% | 90.4% | 97.6% | 9.6% |
 | | v2 | 0% | 2.0% | 92.8% | 96.8% | 9.6% |
@@ -221,22 +225,29 @@ their weights can't be published. v3 trains only on public data: Kubernetes, ATT
   many. Most benign edits it flags there are caught for being off-topic, not by the classifier. On the private corpus,
   which it also never saw, it flags 94.4% of attack edits on the 10 held-out documents at 12.9% of benign edits, against
   61.6% at 25.8% for the off-the-shelf classifier (shipped thresholds).
-- **What this doesn't show.** These attacks all come from BIPIA. On a small private set of attacks written as ordinary
-  notes, one of them phrased as a note from a person in authority, v2 and v3 flagged fewer page edits than the
-  off-the-shelf classifier (about 64% against 89%). The notes are few, so treat that as a warning, not a rate.
-- **Default.** The SDK uses the off-the-shelf classifier by default. The public-data weights will be published with the 0.1.0 release.
+- **v3 misses notes.** BIPIA's attacks read like commands. On a small private set of attacks written as ordinary notes,
+  v3 never flagged the one phrased as a note from a person in authority, which the off-the-shelf classifier flagged every
+  time. Planted in a trusted page, that note still worked on the model.
+- **v4 and v5 add notes.** v4 adds 150 note-style attacks from LLMail-Inject, with its benign emails and NotInject's
+  harmless trigger-word prompts as negatives (`--note-attacks 150`). It flagged 85% of edits that added the authority
+  note, but warned on 8.3% of clean Microsoft 365 chunks, mostly setup steps ("Enter your name, business phone
+  number..."). v5 also doubles the Kubernetes and ATT&CK passages (`--public-units 2400`). It flags every edit that adds
+  the note (80% of low-trust copies that carry it), and its false alarms are back at v3's level (the table). The note
+  set has only 4 notes and was used to choose v4 and v5, so it isn't a blind test.
+- **Default.** The SDK uses the off-the-shelf classifier by default. v5's weights will be published with the 0.1.0
+  release and become the default.
 
 **Hidden characters** (experiment 5). Each BIPIA test attack is disguised and then placed inside a clean chunk. "Caught"
 means either the cleaned text scores ≥ 0.5 or the check flags the disguise.
 
-| Disguise | Off-the-shelf alone, Kubernetes hosts | Off-the-shelf alone, private-corpus hosts | Fine-tuned v3 alone, Microsoft 365 hosts | With the check |
-|---|---|---|---|---|
-| none (plain attack) | 0% | 3.2% | 89.6% | unchanged (nothing to find) |
-| zero-width space every 3 characters | 19.2% | 40.0% | 59.2% | 100% |
-| zero-width joiner inside words | 4.8% | 17.6% | 45.6% | 100% |
-| Cyrillic and Greek look-alikes | 4.0% | 13.6% | 32.0% | 100% |
-| fullwidth letters | 7.2% | 20.0% | 23.2% | 100% |
-| Unicode tag characters (invisible, model-readable) | 3.2% | 8.0% | 0% | 100% |
+| Disguise | Off-the-shelf alone, Kubernetes hosts | Off-the-shelf alone, private-corpus hosts | Fine-tuned v3 alone, Microsoft 365 hosts | Fine-tuned v5 alone, Microsoft 365 hosts | With the check |
+|---|---|---|---|---|---|
+| none (plain attack) | 0% | 3.2% | 89.6% | 91.2% | unchanged (nothing to find) |
+| zero-width space every 3 characters | 19.2% | 40.0% | 59.2% | 0.8% | 100% |
+| zero-width joiner inside words | 4.8% | 17.6% | 45.6% | 24.0% | 100% |
+| Cyrillic and Greek look-alikes | 4.0% | 13.6% | 32.0% | 67.2% | 100% |
+| fullwidth letters | 7.2% | 20.0% | 23.2% | 0.8% | 100% |
+| Unicode tag characters (invisible, model-readable) | 3.2% | 8.0% | 0% | 1.6% | 100% |
 
 The check raised no false alarms on any of these:
 
@@ -248,9 +259,9 @@ The check raised no false alarms on any of these:
 The check catches the disguise, not the injection. A plain attack pasted into a long page is the classifier's job, and
 the off-the-shelf classifier mostly misses it (the first row).
 
-A better classifier doesn't make the check redundant. v3 catches 89.6% of plain attacks inside Microsoft 365 chunks, but
-23.2% of the same attacks in fullwidth letters and none as tag characters. Cleaned by the check, they score 87–90%
-again, and the check flags all of them.
+A better classifier doesn't make the check redundant. v5 catches 91.2% of plain attacks inside Microsoft 365 chunks, but
+under 2% of the same attacks with zero-width spaces, in fullwidth letters or as tag characters. Cleaned by the check,
+they score 87–91% again, and the check flags all of them. The shield always scores the cleaned text.
 
 ### Private corpus (experiments 1–4 and the fine-tune)
 
@@ -274,9 +285,10 @@ Results, briefly:
 - **Direct edits to the store.** Overwriting the text of 125 stored chunks with the 125 BIPIA test attacks, bypassing
   ingestion, failed the signature check 125 times out of 125. The shield drops any chunk that fails that check.
 - **Delta scoring on 10 held-out documents.** Attack edits flagged went from 23% (off-the-shelf, 4.8% of benign edits)
-  to 98.4% with v1 (3.2%), 98.4% with v2 (0 of 62 benign edits) and 97.6% with v3 (3.2%), with thresholds calibrated per
-  model on benign edits. At the shipped thresholds, which are what a user gets: 61.6% (25.8%) off-the-shelf, 95.2% (11.3%)
-  v1, 96.8% (11.3%) v2 and 94.4% (12.9%) v3. v3 never saw any of this corpus.
+  to 98.4% with v1 (3.2%), 98.4% with v2 (0 of 62 benign edits), 97.6% with v3 (3.2%) and 96.0% with v5 (0 of 62),
+  with thresholds calibrated per model on benign edits. At the shipped thresholds, which are what a user gets: 61.6%
+  (25.8%) off-the-shelf, 95.2% (11.3%) v1, 96.8% (11.3%) v2, 94.4% (12.9%) v3 and 91.2% (11.3%) v5. v3 and v5 never saw
+  any of this corpus.
 - **PoisonedRAG.** PoisonedRAG texts contain no instructions, so the classifier can't help; the trust tier and the
   outlier model are the controls. Qwen3-4B answered from the top 5 passages, and "attack success" means the planted
   wrong answer appeared in its answer as whole words. In brackets: how often it stated that answer flatly, without calling it
@@ -316,6 +328,8 @@ pip install torch --index-url https://download.pytorch.org/whl/cu128
 ../.venv/bin/python finetune_injection.py --device cuda --deepset                     # v1; about a minute on an RTX 4080
 ../.venv/bin/python finetune_injection.py --device cuda --deepset --public-negatives k8s --name ragshield-injection-v2
 ../.venv/bin/python finetune_injection.py --device cuda --deepset --public-only --public-negatives k8s attack --name ragshield-injection-v3
+../.venv/bin/python finetune_injection.py --device cuda --deepset --public-only --public-negatives k8s attack \
+  --note-attacks 150 --public-units 2400 --name ragshield-injection-v5                  # the shipped model
 ../.venv/bin/python attack_bipia.py --injection-model ../models/ragshield-injection-v2 --split test
 ../.venv/bin/python delta_edits.py  --injection-model ../models/ragshield-injection-v2 --split test
 ../.venv/bin/python poisonedrag.py --generator Qwen/Qwen3-4B --device cuda           # answer level, about 500 generations
@@ -356,6 +370,7 @@ shows v1 has the same problem with how-to text.
 | `data/external/bipia/` | Microsoft BIPIA attack files, train and test splits | MIT (LICENSE included) |
 | `data/external/poisonedrag/nq.json` | PoisonedRAG (Zou et al.) published adversarial texts for 100 NQ questions, unchanged | MIT (LICENSE included) |
 | `data/external/k8s/`, `data/external/attack/`, `data/external/docker/`, `data/external/m365/` | Kubernetes task docs, MITRE ATT&CK Enterprise 20.0 technique pages, Docker's manuals and Microsoft 365 admin docs. Fetched at pinned versions by `experiments/fetch_corpus.py` and not committed; each folder's `SOURCE.md` records its attribution | CC BY 4.0; MITRE ATT&CK license; Apache-2.0; CC BY 4.0 |
+| Downloaded when fine-tuning, not committed | deepset/prompt-injections; LLMail-Inject (Microsoft) note-style attacks and benign emails; NotInject harmless prompts | Apache-2.0; MIT; MIT |
 | `data/splits.json` | Document-level train/test split of the private corpus, reused by every experiment that uses a tuned model | — |
 | `data/vandelay/`, `vendor/` | Private corpus, questions and evaluation harness (not distributed) | — |
 
@@ -376,7 +391,6 @@ shows v1 has the same problem with how-to text.
   `hidden.clean()`.
 - The retrieval-frequency probe is tested on synthetic data only. How well it separates real attacks from popular
   pages hasn't been measured yet.
-- A review dashboard and reviewer summaries are planned.
 - Benign edits in the delta experiments are built from other documents of the same type. That is probably *harder*
   (more off-topic) than real edits, so the false-alarm rate is a conservative estimate.
 
