@@ -48,7 +48,7 @@ attacks = attacks[:args.limit] if args.limit else attacks
 
 t0 = time.time()
 # 1. False alarms on clean chunks. Flags are off in this policy so scores are collected without side effects.
-shield = make_shield(embedder, injection, Policy(delta_injection=2.0, delta_offtopic=2.0))
+shield = make_shield(embedder, injection, Policy(delta_injection=2.0, delta_offtopic=2.0, hold_edits=False))
 for d in docs:
     shield.ingest(d.doc_id, d.text, args.corpus, 'high', metadata=d.metadata())
 shield.fit_outlier(fit_ids=list(shield.index.ids))

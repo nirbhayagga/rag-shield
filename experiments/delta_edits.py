@@ -118,7 +118,8 @@ def run(shield, case, retrieve=False):
 
 t0 = time.time()
 # Pass 1: threshold-free scores (flags disabled), used for calibration.
-probe_policy = Policy(delta_injection=2.0, delta_offtopic=2.0)
+# Holds are off in both passes: this measures what gets flagged, and a held edit never reaches the index to be scored.
+probe_policy = Policy(delta_injection=2.0, delta_offtopic=2.0, hold_edits=False)
 shield = build(probe_policy)
 for case in cases:
     case['scores'] = run(shield, case)
@@ -130,7 +131,7 @@ threshold = float(np.quantile(calibration, 1 - args.target_fpr / 2))
 inj_threshold = float(np.quantile([s['delta_injection'] for s in cal], 1 - args.target_fpr / 2))
 
 # Pass 2: calibrated policy, with retrieval outcomes.
-policy = Policy(delta_offtopic=threshold, delta_injection=inj_threshold)
+policy = Policy(delta_offtopic=threshold, delta_injection=inj_threshold, hold_edits=False)
 shield = build(policy)
 for case in cases:
     case['final'] = run(shield, case, retrieve=True)

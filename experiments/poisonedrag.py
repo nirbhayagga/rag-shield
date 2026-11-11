@@ -19,7 +19,9 @@ Variants:
   --policy warn-outliers   the earlier policy: low-trust outliers are labeled, not dropped (shipped drops them)
   --labels                 each shielded passage carries its source, trust tier and warning, and the model is told to
                            treat low-trust or warned passages as unverified (does a label alone protect the answer?)
-Writes results/poisonedrag[-warn-outliers][-labels].json (or the model/split-specific name). Generations are cached in
+  --hold                   flagged edits are held for review and the previous version keeps serving (the SDK default);
+                           without it they are served with a warning, as in runs before holds existed
+Writes results/poisonedrag[-warn-outliers][-labels][-hold].json (or the model/split-specific name). Generations are cached in
 results/cache/.
 Usage: python poisonedrag.py [--generator Qwen/Qwen3-4B --device cuda] [--policy ...] [--labels] [--nq 50] [--limit 5]"""
 import argparse
@@ -46,6 +48,7 @@ parser.add_argument('--max-new-tokens', type=int, default=120)
 parser.add_argument('--out', default=None, help='override the results path (smoke tests)')
 parser.add_argument('--policy', choices=('shipped', 'warn-outliers'), default='shipped')
 parser.add_argument('--labels', action='store_true', help='show trust labels to the generator')
+parser.add_argument('--hold', action='store_true', help='hold flagged edits for review (the SDK default)')
 add_eval_args(parser)
 args = parser.parse_args()
 
@@ -88,7 +91,8 @@ def ingest_corpus(shield, skip=()):
 
 
 def build(scenario):
-    shield = make_shield(embedder, injection, Policy() if args.policy == 'shipped' else Policy(outlier_block_tiers=()))
+    policy = Policy(hold_edits=args.hold) if args.policy == 'shipped' else Policy(outlier_block_tiers=(), hold_edits=args.hold)
+    shield = make_shield(embedder, injection, policy)
     ingest_corpus(shield)
     clean_ids = list(shield.index.ids)
     if scenario == 'T2_low_trust_upload':
@@ -142,7 +146,7 @@ t0 = time.time()
 gen = Generator(args.generator, args.device, args.max_new_tokens, SYSTEM_LABELS if args.labels else SYSTEM) if args.generator != 'none' else None
 results = {'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'seed': args.seed, 'k': args.k,
            'injection_model': args.injection_model, 'split': args.split, 'generator': args.generator,
-           'policy': args.policy, 'labels': args.labels,
+           'policy': args.policy, 'labels': args.labels, 'hold_edits': args.hold,
            'cases': {s: sum(c['set'] == s for c in cases) for s in ('vandelay', 'nq')},
            'source': 'sleeepeer/PoisonedRAG results/adv_targeted_results/nq.json (MIT); data/vandelay/poison_targets.json (ours)'}
 rows = []
@@ -178,7 +182,8 @@ for scenario in ('T2_low_trust_upload', 'T3n_trusted_new_page', 'T3e_trusted_pag
                      'outcomes': [outcome(shield, cid, on) for cid in retrieved],
                      'injection_max': round(max((s.get('injection', 0) for s in flags.values()), default=0), 4),
                      'outlier_any': any(s.get('outlier_flag') for s in flags.values()),
-                     'delta_flag_any': any(s.get('delta_flag') for s in flags.values())})
+                     'delta_flag_any': any(s.get('delta_flag') for s in flags.values()),
+                     'held': scenario == 'T3e_trusted_page_edit' and bool(shield.ledger.held(c['host']))})
         items_off.append((c['question'], [h['text'] for h in raw]))
         items_on.append((c['question'], shown(list(on.values()), True)))
     if gen:
@@ -200,7 +205,8 @@ for scenario in ('T2_low_trust_upload', 'T3n_trusted_new_page', 'T3e_trusted_pag
                  'poison_chunks_retrieved_unshielded': len(retrieved),
                  'outcomes_when_retrieved': outcome_counts(retrieved, len(retrieved)),
                  'detector_flags': {'injection_ge_warn': sum(r['injection_max'] >= 0.5 for r in rs),
-                                    'outlier': sum(r['outlier_any'] for r in rs), 'delta_flag': sum(r['delta_flag_any'] for r in rs)}}
+                                    'outlier': sum(r['outlier_any'] for r in rs), 'delta_flag': sum(r['delta_flag_any'] for r in rs),
+                                    'held': sum(r['held'] for r in rs)}}
         if gen:
             cs = [c for c in cases if c['set'] == s]
             def level(scores):
@@ -213,7 +219,7 @@ for scenario in ('T2_low_trust_upload', 'T3n_trusted_new_page', 'T3e_trusted_pag
         summary.setdefault(scenario, {})[s] = entry
 results['summary'] = summary
 results['runtime_sec'] = round(time.time() - t0, 1)
-stem = 'poisonedrag' + ('-warn-outliers' if args.policy != 'shipped' else '') + ('-labels' if args.labels else '')
+stem = 'poisonedrag' + ('-warn-outliers' if args.policy != 'shipped' else '') + ('-labels' if args.labels else '') + ('-hold' if args.hold else '')
 out = Path(args.out) if args.out else out_path(stem, args)
 out.write_text(json.dumps({**results, 'rows': rows, 'clean_answers': {c['id']: c.get('clean_answer') for c in cases} if gen else None}, indent=2))
 print(json.dumps(results, indent=2))
