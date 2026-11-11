@@ -30,6 +30,11 @@ class SnapshotTests(unittest.TestCase):
         self.assertIn('possible instructions', item['reason'])
         self.assertGreater(item['scores']['injection'], 0.9)
 
+    def test_unscored_chunks_are_not_sent_one_by_one(self):
+        shield = make_shield()
+        shield.ingest('kb', 'vpn setup guide for contractors', 'wiki', 'high')
+        self.assertEqual(snapshot(shield)['items'], [])
+
     def test_text_changed_in_the_store_is_reported(self):
         self.shield.index.set_text('clean::0', 'changed behind the ledger')
         item = next(i for i in snapshot(self.shield)['items'] if i['chunk_id'] == 'clean::0')

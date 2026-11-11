@@ -10,6 +10,8 @@ import numpy as np
 from . import chunking, delta, hidden
 from .provenance import TIERS, new_record
 
+UNSCORED = 'unscored: no injection score'
+
 
 @dataclass
 class Policy:
@@ -31,6 +33,15 @@ class Policy:
     # experiment, off-topic poison that was flagged but still reached the model worked 84% of the time, and 80% when the model
     # was shown the flag (it hedged, but repeated the false answer). Dropped, it worked 0% of the time.
     outlier_block_tiers: tuple = ('low',)
+    # Fail-open vs fail-closed: a chunk with no injection score (no classifier configured, or it failed) is never treated as
+    # safe. 'warn' serves it with an "unscored" label (fail-open); 'drop' refuses to serve it (fail-closed).
+    unscored: str = 'warn'
+    # Retrieval-frequency probe (probe_frequency): a chunk in the top k for an unusual share of typical queries is flagged.
+    # Both limits apply, so a small index, where every chunk is retrieved often, doesn't flag everything.
+    frequency_min_share: float = 0.10   # retrieved for at least this share of the probe queries
+    frequency_ratio: float = 10.0       # and at least this many times its expected share (k / number of chunks)
+    frequency_min_queries: int = 20     # fewer probe queries than this flag nothing
+    frequency_block_tiers: tuple = ('low',)
 
 
 class Shield:
@@ -55,12 +66,13 @@ class Shield:
         pieces = chunking.chunk(text, chunk_size, overlap)
         inspected = [hidden.inspect(piece) for piece in pieces]  # (what a reader sees, what was hidden)
         vectors = self.embedder.passages(pieces)
-        injection = self.injection.score([seen for seen, _ in inspected]) if self.injection else np.zeros(len(pieces))
+        scored = self._injection([seen for seen, _ in inspected], doc_id)
+        injection = scored if scored is not None else np.zeros(len(pieces))
         records = []
         for i, (piece, vector, inj, (_, hid)) in enumerate(zip(pieces, vectors, injection, inspected)):
             chunk_id = f'{doc_id}::{i}'
             record = self.signer.sign(new_record(chunk_id, doc_id, source_id, trust_tier, i, piece))
-            record.scores = {'injection': round(float(inj), 4)}
+            record.scores = {'injection': round(float(inj), 4)} if scored is not None else {'unscored': True}
             if self.policy.hidden_check and hidden.total(hid):
                 record.scores['hidden'] = {k: n for k, n in hid.items() if n}
                 if trust_tier not in self.policy.block_tiers:
@@ -97,11 +109,22 @@ class Shield:
         old_vecs = self.embedder.passages(previous)
         offtopic = 1 - (new_vecs @ old_vecs.T).max(axis=1)
         inspected = [hidden.inspect(t) for t in added]
-        inj = self.injection.score([seen for seen, _ in inspected]) if self.injection else np.zeros(len(added))
+        scored = self._injection([seen for seen, _ in inspected], 'an edit')
+        inj = scored if scored is not None else np.zeros(len(added))
         hid = [hidden.total(h) if p.hidden_check else 0 for _, h in inspected]
         return [{'text': t, 'offtopic': round(float(o), 4), 'injection': round(float(s), 4), 'hidden': n,
                  'flag': bool(s >= p.delta_injection or o >= p.delta_offtopic or n > 0)}
                 for t, o, s, n in zip(added, offtopic, inj, hid)]
+
+    def _injection(self, texts, what):
+        """Injection scores, or None when there's no classifier or it fails. Those chunks are labeled unscored, never passed as safe."""
+        if self.injection is None:
+            return None
+        try:
+            return self.injection.score(texts)
+        except Exception as error:  # a crashed classifier must not stop ingestion or pass content as safe
+            self._event('-', 'unscored', f'injection classifier failed on {what}: {type(error).__name__}')
+            return None
 
     def fit_outlier(self, tiers=('high',), fit_ids=None):
         """Fit the outlier model on trusted chunks (or on a reviewed snapshot, fit_ids), then score every chunk."""
@@ -118,6 +141,32 @@ class Shield:
             self.ledger.put(record)  # scores are outside the signed fields, so the signature stays valid
         return int(flags.sum())
 
+    def probe_frequency(self, queries, k=5):
+        """Retrieval-frequency probe: run typical queries and flag chunks that land in the top k for an unusual share of them.
+
+        A chunk written to match many unrelated questions shows up here even when its text and vector look normal. Run it on a
+        schedule, as you would fit_outlier; the scores sit outside the signed fields. Returns the number of chunks flagged."""
+        p, ids = self.policy, list(self.index.ids)
+        counts = dict.fromkeys(ids, 0)
+        for question in queries:
+            for hit in self.index.search(self.embedder.query(question), k):
+                counts[hit['chunk_id']] = counts.get(hit['chunk_id'], 0) + 1
+        n = len(queries)
+        limit = max(p.frequency_min_share, p.frequency_ratio * k / max(len(ids), 1))
+        flagged = 0
+        for chunk_id in ids:
+            record = self.ledger.get(chunk_id)[0]
+            if record is None:  # written around the ingestion gate; retrieval drops it anyway
+                continue
+            share = counts[chunk_id] / n if n else 0.0
+            flag = n >= p.frequency_min_queries and share >= limit
+            record.scores.update({'frequency': {'share': round(share, 4), 'queries': n, 'k': k}, 'frequency_flag': flag})
+            self.ledger.put(record)
+            if flag:
+                flagged += 1
+                self._event(chunk_id, 'review', f'in the top {k} for {share:.0%} of {n} probe queries')
+        return flagged
+
     # Retrieval ---------------------------------------------------------------------------------
 
     def decide(self, hit):
@@ -130,6 +179,10 @@ class Shield:
         if inj >= p.injection_block and blockable:
             return {'action': 'drop', 'reason': f'injection {inj:.2f}', 'trust': 0.0}
         reasons = []
+        if record.scores.get('unscored'):
+            if p.unscored == 'drop':
+                return {'action': 'drop', 'reason': UNSCORED, 'trust': 0.0}
+            reasons.append(UNSCORED)
         if inj >= p.injection_block:
             reasons.append(f'awaiting review: possible instructions ({inj:.2f})')
         elif inj >= p.injection_warn:
@@ -138,6 +191,11 @@ class Shield:
             if tier in p.outlier_block_tiers:
                 return {'action': 'drop', 'reason': 'embedding outlier from a low-trust source', 'trust': 0.0}
             reasons.append('embedding outlier')
+        if record.scores.get('frequency_flag'):
+            f = record.scores['frequency']
+            if tier in p.frequency_block_tiers:
+                return {'action': 'drop', 'reason': 'retrieved for too many unrelated queries', 'trust': 0.0}
+            reasons.append(f"in the top {f['k']} for {f['share']:.0%} of probe queries")
         if record.scores.get('hidden'):
             if blockable:
                 return {'action': 'drop', 'reason': hidden.describe(record.scores['hidden']), 'trust': 0.0}

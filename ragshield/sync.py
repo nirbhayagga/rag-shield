@@ -6,8 +6,10 @@ import urllib.parse
 import urllib.request
 
 from .provenance import sha256
+from .shield import UNSCORED
 
-LOW_TRUST_ONLY = 'low-trust source'  # true of every chunk from such a source, so not worth a reviewer's time
+LOW_TRUST_ONLY = 'low-trust source'
+ROUTINE = {LOW_TRUST_ONLY, UNSCORED}  # true of a whole source or setup, so not worth a reviewer's time chunk by chunk
 PREVIEW_CHARS = 2000
 
 
@@ -16,7 +18,7 @@ def snapshot(shield, previews=False):
     items = []
     for chunk_id, text in zip(shield.index.ids, shield.index.texts):
         decision = shield.decide({'chunk_id': chunk_id, 'text': text})
-        if decision['action'] == 'pass' or decision['reason'] == LOW_TRUST_ONLY:
+        if decision['action'] == 'pass' or set(decision['reason'].split(', ')) <= ROUTINE:
             continue
         record = shield.ledger.get(chunk_id)[0]  # None for a chunk written around the ingestion gate
         item = {'chunk_id': chunk_id, 'doc_id': record.doc_id if record else chunk_id.split('::')[0], 'text_sha256': sha256(text),
