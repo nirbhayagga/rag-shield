@@ -14,9 +14,10 @@ warning and sent to a review queue. Everything runs locally: no text leaves your
 | Ingestion signer | `ragshield/provenance.py` | SHA-256 + Ed25519 signature per chunk, SQLite ledger, key revocation, document versions |
 | Delta scoring | `ragshield/delta.py`, `shield.py` | On re-ingestion, isolates new paragraphs (or new sentences in modified paragraphs) and scores only those |
 | Hidden characters | `ragshield/hidden.py` | Finds invisible, tag, direction-control and look-alike characters; the classifier scores the cleaned text and the finding is its own reason. Ordinary multilingual text and emoji are left alone |
-| Detectors | `ragshield/detectors.py` | Injection classifier (ProtectAI DeBERTa-v3 by default) and an embedding-outlier model (LOF over bge-base) |
+| Detectors | `ragshield/detectors.py`, `shield.py` | Injection classifier (ProtectAI DeBERTa-v3 by default), an embedding-outlier model (LOF over bge-base) and a retrieval-frequency probe |
 | Trust filter | `ragshield/shield.py` | Verifies each retrieved chunk, drops tampered/unknown/quarantined chunks, warns and queues suspicious trusted content, re-ranks by similarity × trust; `lockdown` kill switch |
 | Index | `ragshield/index.py`, `ragshield/adapters.py` | Built-in cosine index, or adapters for ChromaDB and pgvector |
+| Retrievers | `ragshield/integrations/` | Drop-in LangChain and LlamaIndex retrievers |
 
 The policy is deliberately asymmetric:
 
@@ -28,6 +29,8 @@ The policy is deliberately asymmetric:
   the chunk (see the PoisonedRAG results).
 - Other low-trust chunks that carry a warning are dropped when their ranking weight falls below `Policy.min_rank`.
 - Chunks that can't be verified are always dropped.
+- A chunk with no injection score (no classifier configured, or it failed) is never passed as safe. It is served with an
+  `unscored` label, or dropped with `Policy.unscored = 'drop'` if you'd rather fail closed.
 
 ## Install
 
@@ -65,6 +68,17 @@ for when, chunk_id, action, reason in shield.events:                      # the 
 Trust tiers are `high`, `medium` and `low`. `Policy` (in `shield.py`) holds every threshold. Call
 `shield.fit_outlier()` once the trusted corpus is ingested to turn on the outlier model.
 
+Call `shield.probe_frequency(queries)` on a schedule with a few hundred of your users' typical questions. It flags chunks
+that land in the top results for an unusual share of them (by default at least 10% of the queries and 10 times their
+expected share), which is how a chunk written to match many unrelated questions shows up even when its text looks normal.
+Flagged chunks from low-trust sources are dropped; trusted ones get a warning.
+
+### Try it
+
+`python examples/demo.py` runs a small company wiki through three attacks: an instruction planted in a trusted
+page, a low-trust upload carrying an injection, and a chunk changed directly in the vector store. It prints what the
+vector database returned and what the shield did with each result.
+
 ### Use your own vector database
 
 `ChromaIndex` and `PgVectorIndex` replace `VectorIndex`; nothing else changes. Your vectors and text stay in your database and
@@ -84,6 +98,22 @@ index = PgVectorIndex(psycopg.connect('postgresql://localhost/app', autocommit=T
 ```
 
 The adapters check the chunk's text, not its vector: changing only a stored vector can move a chunk up or down the ranking.
+
+### LangChain and LlamaIndex
+
+```python
+# pip install "rag-shield[langchain]"
+from ragshield.integrations.langchain import ShieldRetriever
+docs = ShieldRetriever(shield=shield, k=5).invoke('How do contractors get VPN access?')
+
+# pip install "rag-shield[llamaindex]"
+from ragshield.integrations.llamaindex import ShieldRetriever
+nodes = ShieldRetriever(shield, k=5).retrieve('How do contractors get VPN access?')
+```
+
+Tampered, unknown and quarantined chunks never come back. Each result carries its decision in metadata
+(`ragshield_action` is `pass` or `warn`, and `ragshield_reason` says why), and your application decides what to do with
+a warned chunk. The LlamaIndex retriever keeps these fields out of the text it sends to the model.
 
 ### Scan your own corpus (index exposure report)
 
@@ -321,6 +351,8 @@ shows v1 has the same problem with how-to text.
 - A trusted chunk with hidden characters is served as stored, with a warning. The shield labels it but doesn't rewrite
   it, because the signature covers the original text. An application that wants the cleaned text can call
   `hidden.clean()`.
+- The retrieval-frequency probe is tested on synthetic data only. How well it separates real attacks from popular
+  pages hasn't been measured yet.
 - A review dashboard and reviewer summaries are planned.
 - Benign edits in the delta experiments are built from other documents of the same type. That is probably *harder*
   (more off-topic) than real edits, so the false-alarm rate is a conservative estimate.
