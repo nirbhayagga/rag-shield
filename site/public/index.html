@@ -58,17 +58,17 @@
     </div>
     <p class="fine">Open-source SDK · first release November 2026 · runs in your environment</p>
   </div>
-  <div class="log" role="img" aria-label="Example retrieval trace: three chunks served, one with a warning, two dropped">
+  <div class="log" role="img" aria-label="Example retrieval trace: three chunks served, an edit held for review, two dropped">
     <div class="log-bar"><span>retrieval trace</span><span>example</span></div>
     <pre><code><span class="dim">&gt;&gt;&gt;</span> shield.retrieve("rotate the VPN signing key")
 
 <span class="pass">PASS</span>  wiki/vpn-keys §3    <span class="dim">verified · high</span>
 <span class="pass">PASS</span>  wiki/vpn-keys §4    <span class="dim">verified · high</span>
-<span class="warn">WARN</span>  wiki/vpn-keys §5    <span class="dim">edit adds 1 sentence</span>
+<span class="warn">HOLD</span>  wiki/vpn-keys §5    <span class="dim">edit adds 1 sentence · v7 served</span>
 <span class="drop">DROP</span>  vectors/18342       <span class="dim">hash mismatch</span>
 <span class="drop">DROP</span>  uploads/faq.pdf     <span class="dim">injection 0.97 · low</span>
 
-<span class="dim">served 3 of 5 · 1 queued for review · 3 ms</span></code></pre>
+<span class="dim">served 3 of 5 · 1 edit held for review · 3 ms</span></code></pre>
   </div>
 </section>
 
@@ -89,7 +89,7 @@
     <article>
       <h3>A compromised trusted page</h3>
       <p>An approved wiki page is edited. Signing can't help, because the page really is from your wiki.</p>
-      <p class="result"><strong>Delta scoring isolates the edit.</strong> With our fine-tuned classifier, 93–95% of edits that plant instructions were flagged on public docs it never saw.</p>
+      <p class="result"><strong>Delta scoring isolates the edit, and a flagged edit waits for review.</strong> With our fine-tuned classifier, 94–96% of edits that plant instructions were flagged on public docs it never saw.</p>
     </article>
   </div>
   <figure class="diff">
@@ -102,7 +102,7 @@
     <dl class="diff-scores">
       <div><dt>Whole chunk</dt><dd>injection 0.04, looks clean</dd></div>
       <div><dt>Added sentence alone</dt><dd>off-topic 0.58 · instructions 0.91</dd></div>
-      <div><dt>Decision</dt><dd><b class="warn">WARN</b> · served with a label, queued for review</dd></div>
+      <div><dt>Decision</dt><dd><b class="warn">HOLD</b> · v7 keeps serving until a reviewer approves v8</dd></div>
     </dl>
   </figure>
 </section>
@@ -114,7 +114,7 @@
     <article><h3>Sign at ingestion</h3><p>Each chunk's hash and source are signed with Ed25519 and kept in a provenance ledger.</p></article>
     <article><h3>Score what changed</h3><p>A re-ingested page is compared with its last signed version, and only the new sentences are scored.</p></article>
     <article><h3>Detect locally</h3><p>An injection classifier and an embedding-outlier model run in your environment.</p></article>
-    <article><h3>Filter at retrieval</h3><p>Unverified chunks are dropped. Suspicious trusted chunks are served with a warning and queued for review.</p></article>
+    <article><h3>Filter at retrieval</h3><p>Unverified chunks are dropped. A flagged edit waits for review while the previous version serves, and other suspicious trusted chunks carry a warning.</p></article>
   </div>
 </section>
 
@@ -146,7 +146,7 @@ shield.ingest(<span class="str">"wiki/vpn-keys"</span>, page_text,
       <li>Pure Python, runs on a CPU</li>
       <li>Three trust tiers: high, medium and low</li>
       <li>Every drop and review goes to an audit trail</li>
-      <li>LangChain, LlamaIndex, ChromaDB and pgvector adapters are planned for the first release</li>
+      <li>LangChain and LlamaIndex retrievers, and ChromaDB and pgvector adapters</li>
     </ul>
   </div>
 </section>
@@ -157,12 +157,12 @@ shield.ingest(<span class="str">"wiki/vpn-keys"</span>, page_text,
   <div class="ruled four stats">
     <div><p class="big">125<span>/125</span></p><p>chunks edited in the vector store were dropped</p><p class="base"><span>without</span>all 125 served</p></div>
     <div><p class="big">0<span>/88</span></p><p>low-trust poisoned chunks were served without a warning</p><p class="base"><span>without</span>88 of 88</p></div>
-    <div><p class="big">95<span>%</span></p><p>of edits planting instructions in a trusted page flagged, at 8.8% false alarms</p><p class="base"><span>off-the-shelf classifier</span>46% flagged</p></div>
+    <div><p class="big">96<span>%</span></p><p>of edits planting instructions in a trusted page flagged, at 9.6% false alarms</p><p class="base"><span>off-the-shelf classifier</span>46% flagged</p></div>
     <div><p class="big">3<span> ms</span></p><p>added per retrieval on a CPU</p><p class="base"><span>on clean questions</span>recall@5 unchanged</p></div>
   </div>
   <p class="fine note">Measured on a 35-document synthetic security corpus with 125 published attacks from Microsoft's BIPIA benchmark (MIT).
     The trusted-page figure is from Microsoft 365's admin documentation (3,172 chunks) and BIPIA test attacks, none of which our fine-tuned classifier saw in training.
-    On Docker's documentation it flagged 93% at 5.6% false alarms. Attacks written as ordinary notes are harder for it. The fine-tuned classifier isn't part of the open-source SDK yet.
+    On Docker's documentation it flagged 94% at 4.8% false alarms. It was retrained on note-style attacks after missing one written as a note from a manager; that test set is small. The fine-tuned classifier isn't part of the open-source SDK yet.
     Full methodology will be published with the SDK.</p>
 </section>
 
@@ -234,7 +234,7 @@ shield.ingest(<span class="str">"wiki/vpn-keys"</span>, page_text,
   <h2>Questions</h2>
   <div class="faq-list">
     <details><summary>Does my data leave my network?</summary><p>No. The SDK, the detectors and the provenance ledger run in your environment. The hosted dashboard stores chunk IDs, scores and provenance metadata, not text, unless you turn on previews.</p></details>
-    <details><summary>Isn't a prompt-injection classifier enough?</summary><p>On our security corpus, an off-the-shelf classifier separated attacks from normal logs and incident reports barely better than chance (AUROC 0.54). On public how-to docs, delta scoring with that classifier flagged 46% of edits that plant instructions; with our fine-tuned classifier, 93–95%. Our first fine-tune scored nearly half of how-to docs as attacks, so we retrained it and retested on docs it had never seen. Provenance, delta scoring and testing on content like your own are what make detection usable.</p></details>
+    <details><summary>Isn't a prompt-injection classifier enough?</summary><p>On our security corpus, an off-the-shelf classifier separated attacks from normal logs and incident reports barely better than chance (AUROC 0.54). On public how-to docs, delta scoring with that classifier flagged 46% of edits that plant instructions; with our fine-tuned classifier, 94–96%. Our first fine-tune scored nearly half of how-to docs as attacks, so we retrained it and retested on docs it had never seen. Provenance, delta scoring and testing on content like your own are what make detection usable.</p></details>
     <details><summary>Will it delete legitimate content?</summary><p>Never on a detector score alone for trusted sources. Suspicious trusted content is served with a warning and goes to a human review queue.</p></details>
     <details><summary>What happens during an incident?</summary><p>A lockdown switch serves only verified chunks with no warnings at all while you investigate.</p></details>
     <details><summary>Which stacks are supported?</summary><p>Python RAG pipelines. LangChain, LlamaIndex, ChromaDB and pgvector adapters are planned for the first release.</p></details>
