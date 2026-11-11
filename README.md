@@ -294,15 +294,15 @@ Results, briefly:
   wrong answer appeared in its answer as whole words. In brackets: how often it stated that answer flatly, without calling it
   unverified.
 
-  These runs predate holding flagged edits: a flagged trusted edit was served with a warning. With holds, it isn't
-  served until someone approves it.
+  Each column adds one control to the one before it. The last is the shipped policy: low-trust outliers dropped and
+  flagged edits held for review.
 
-  | Poison arrives as | No shield | Flagged, flag not shown to the model | Flagged, flag shown to the model | Low-trust outliers dropped |
-  |---|---|---|---|---|
-  | Low-trust upload, on-topic (our 26 false statements) | 92% | 12% | 12% (0%) | 8% |
-  | Low-trust upload, off-topic (50 PoisonedRAG NQ targets) | 98% | 84% | 80% (2%) | **0%** |
-  | Trusted new page (ours / NQ) | 92% / 98% | 92% / 98% | 92% / 96% (92% / 86%) | 92% / 98% |
-  | Trusted page edit (ours / NQ) | 88% / 96% | 77% / 96% | 69% / 96% (62% / 90%) | 77% / 96% |
+  | Poison arrives as | No shield | Flagged, flag not shown to the model | Flagged, flag shown to the model | Low-trust outliers dropped | Flagged edits held too (shipped) |
+  |---|---|---|---|---|---|
+  | Low-trust upload, on-topic (our 26 false statements) | 92% | 12% | 12% (0%) | 8% | 8% |
+  | Low-trust upload, off-topic (50 PoisonedRAG NQ targets) | 98% | 84% | 80% (2%) | **0%** | **0%** |
+  | Trusted new page (ours / NQ) | 92% / 98% | 92% / 98% | 92% / 96% (92% / 86%) | 92% / 98% | 92% / 98% |
+  | Trusted page edit (ours / NQ) | 81% / 98% | 81% / 98% | 69% / 96% (65% / 88%) | 81% / 98% | 81% / **0%** |
 
   - **A flag on its own changes nothing.** The off-topic poison was flagged every time, but the flag sits in the
     metadata. Unless the application puts it in the prompt, the model never sees it (84%).
@@ -315,10 +315,12 @@ Results, briefly:
   - **Dropping works where the source is low-trust.** That's why the shipped policy drops low-trust outliers: the
     off-topic poison reaches the top 5 in 0 of 50 cases (before: 43) and attack success is 0%. Adding the labels on
     top of that leaves the low-trust rows at 8% (0% stated flatly) and 0%.
+  - **Holding stops flagged edits.** All 50 off-topic page edits were flagged as they came in, so none was served and
+    the previous version answered instead: attack success fell from 98% to 0%.
   - **On-topic false statements from a trusted editor get through.** They were served silently 72% of the time as new
-    pages (94 of 130 chunks) and 75% as page edits (55 of 73). Signing can't help when the editor is legitimate, and
-    holding flagged edits doesn't either, because nothing flags these. That gap needs every trusted edit reviewed, or
-    claims checked against the rest of the corpus.
+    pages (94 of 130 chunks) and 85% as page edits (63 of 74). None of the 26 edits was flagged, so holding changes
+    nothing for them (81% either way). Signing can't help when the editor is legitimate. That gap needs every trusted
+    edit reviewed, or claims checked against the rest of the corpus.
 
 GPU commands (an RTX 20xx has no fast bf16, so add `--precision fp16 --batch 8 --grad-accum 2` there):
 
@@ -334,12 +336,14 @@ pip install torch --index-url https://download.pytorch.org/whl/cu128
 ../.venv/bin/python delta_edits.py  --injection-model ../models/ragshield-injection-v2 --split test
 ../.venv/bin/python poisonedrag.py --generator Qwen/Qwen3-4B --device cuda           # answer level, about 500 generations
 ../.venv/bin/python poisonedrag.py --generator Qwen/Qwen3-4B --device cuda --labels  # the model sees the trust labels
+../.venv/bin/python poisonedrag.py --generator Qwen/Qwen3-4B --device cuda --hold    # flagged edits held, as the SDK does
 for c in attack k8s docker m365; do
   ../.venv/bin/python public_corpus.py --corpus $c --max-chunks 0 --device cuda --injection-model ../models/ragshield-injection-v2
 done
 ```
 
-`poisonedrag.py --policy warn-outliers` reruns the earlier policy for comparison.
+`poisonedrag.py --policy warn-outliers` reruns the earlier policy for comparison. Without `--hold`, the experiments serve
+flagged edits with a warning, so their numbers stay comparable with earlier runs.
 
 The fine-tune report compares the base and fine-tuned models on **held-out documents only**, using BIPIA **test**
 attacks in three styles (whole chunk, delta, inline). It reports AUROC, TPR at 1% and 5% FPR, and FPR at 0.5. It
