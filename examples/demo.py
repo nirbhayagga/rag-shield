@@ -3,7 +3,8 @@
     python examples/demo.py              # press Enter between steps; --no-pause runs straight through
 
 Runs on a CPU in about 20 seconds once the two models are downloaded (about 1 GB, first run only). To also send the
-flagged chunks to a review dashboard, set RAGSHIELD_DASHBOARD_URL and RAGSHIELD_API_KEY."""
+flagged chunks and the held edit to a review dashboard, and decide on the edit there, set RAGSHIELD_DASHBOARD_URL and
+RAGSHIELD_API_KEY."""
 import argparse
 import os
 import sys
@@ -21,7 +22,7 @@ from ragshield.detectors import InjectionDetector  # noqa: E402
 from ragshield.index import Embedder, VectorIndex  # noqa: E402
 from ragshield.provenance import Ledger, Signer  # noqa: E402
 from ragshield.shield import Shield  # noqa: E402
-from ragshield.sync import push  # noqa: E402
+from ragshield.sync import pull, push  # noqa: E402
 
 COLOR = sys.stdout.isatty()
 PAINT = {'pass': '32', 'warn': '33', 'drop': '31', 'head': '1;36', 'dim': '2'}
@@ -94,9 +95,12 @@ def main():
 
     step('2. Someone with edit rights plants an instruction in the VPN page.', pause)
     shield.ingest('vpn-access', WIKI['vpn-access'] + '\n\n' + PLANTED, source_id='wiki', trust_tier='high')
-    print('  RAG Shield compares the new version with the signed one and scores only what was added.')
+    print('  RAG Shield compares the new version with the signed one and scores only what was added:')
+    print(paint(textwrap.indent(textwrap.fill(PLANTED, 92), '      '), 'dim'))
+    hold = next(h for h in shield.held() if h['doc_id'] == 'vpn-access')
+    print(f"  {paint('HELD', 'warn')}  {hold['reason']}")
     show(shield, 'How do contractors get VPN access?')
-    print('\n  Trusted pages are never deleted on a score alone: the page is served with a warning and sent for review.')
+    print('\n  The edit waits for a reviewer. Until then the signed earlier version keeps serving, so the model never reads it.')
 
     step('3. A low-trust upload on the same topic carries an injection.', pause)
     shield.ingest('vendor-vpn-guide', UPLOAD, source_id='uploads', trust_tier='low')
@@ -110,14 +114,27 @@ def main():
 
     step('5. Everything RAG Shield did is in the audit trail.', pause)
     for when, chunk_id, action, reason in shield.events:
-        kind = {'drop': 'drop', 'quarantine': 'drop', 'review': 'warn'}.get(action, 'pass')
+        kind = {'drop': 'drop', 'quarantine': 'drop', 'reject': 'drop', 'review': 'warn', 'hold': 'warn'}.get(action, 'pass')
         print(f'  {when[11:19]} UTC  {paint(action.ljust(10), kind)} {chunk_id:<22} {reason}')
 
     url, key = os.environ.get('RAGSHIELD_DASHBOARD_URL'), os.environ.get('RAGSHIELD_API_KEY')
     if url and key:
-        step('6. Flagged chunks go to the review dashboard.', pause)
+        step('6. Flagged chunks and the held edit go to the review dashboard.', pause)
         result = push(shield, url, key, previews=True)
-        print(f"  Sent {result['items']} flagged chunks, with their provenance and history. Open {url} and sign in.")
+        print(f"  Sent {result['items']} items, with their provenance and history. Open {url} and sign in.")
+        if not pause:
+            return
+        step('7. A reviewer approves or rejects the held edit in the dashboard.', False)
+        input(paint('  Open the vpn-access item, choose Approve or Reject, then press Enter here.', 'dim'))
+        seen = len(shield.events)
+        results = pull(shield, url, key)  # the dashboard never connects in: the SDK asks it for decisions
+        if not results:
+            print('  No decision yet. Run the demo again to try once more.')
+            return
+        for when, chunk_id, action, reason in shield.events[seen:]:
+            print(f'  {when[11:19]} UTC  {paint(action.ljust(10), "drop" if action == "reject" else "pass")} {chunk_id:<22} {reason}')
+        push(shield, url, key, previews=True)
+        show(shield, 'How do contractors get VPN access?')
 
 
 if __name__ == '__main__':
