@@ -1,14 +1,14 @@
 """Ingestion gate + retrieval-time trust filter.
 
 ingest(): chunk -> hash -> detector scores -> sign -> ledger -> index (quarantined chunks are indexed but never served).
+A flagged edit is held instead: the previous version keeps serving until a reviewer approves or rejects the new one.
 retrieve(): over-fetch from the index, verify each chunk against the ledger, apply the policy, re-rank by similarity x trust."""
-import time
 from dataclasses import dataclass
 
 import numpy as np
 
 from . import chunking, delta, hidden
-from .provenance import TIERS, new_record
+from .provenance import TIERS, new_record, now, sha256
 
 UNSCORED = 'unscored: no injection score'
 
@@ -42,6 +42,9 @@ class Policy:
     frequency_ratio: float = 10.0       # and at least this many times its expected share (k / number of chunks)
     frequency_min_queries: int = 20     # fewer probe queries than this flag nothing
     frequency_block_tiers: tuple = ('low',)
+    # A flagged edit waits for review and the previous version keeps serving: see held(), approve() and reject(). Served
+    # with a warning instead, an instruction planted in a trusted page still reaches the model, and models often follow it.
+    hold_edits: bool = True
 
 
 class Shield:
@@ -55,10 +58,22 @@ class Shield:
 
     def ingest(self, doc_id, text, source_id, trust_tier, chunk_size=800, overlap=100, metadata=None):
         """Ingest a document, or a new version of one: the previous version's chunks are replaced, and what was added
-        since the last signed version is scored on its own (delta scoring)."""
+        since the last signed version is scored on its own (delta scoring).
+
+        If anything the edit added is flagged and policy.hold_edits is on, the new version is held for review instead:
+        the index doesn't change, the previous version keeps serving, and this returns []."""
+        return self._ingest(doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata)
+
+    def _ingest(self, doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, approved_by=None):
         paragraphs = delta.paragraphs(text)
         version, previous = self.ledger.latest_version(doc_id)
         additions = self._score_additions(delta.additions(previous, paragraphs), previous) if version else []
+        if approved_by is None and self.policy.hold_edits and any(a['flag'] for a in additions):
+            self._hold(doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, additions, version)
+            return []
+        if approved_by is None and self.ledger.held(doc_id):
+            self.ledger.close_hold(doc_id, 'superseded')
+            self._event(doc_id, 'release', 'held edit replaced by a newer version with nothing flagged')
         if version:
             self.index.remove_doc(doc_id)
             self.ledger.delete_doc_chunks(doc_id)
@@ -82,10 +97,17 @@ class Shield:
             if mine:
                 record.scores['delta'] = {'injection': max(a['injection'] for a in mine),
                                           'offtopic': max(a['offtopic'] for a in mine), 'added': len(mine)}
-                if any(a['flag'] for a in mine):
+                if approved_by is not None:
+                    record.scores['approved'] = {'by': approved_by, 'at': now()}
+                elif any(a['flag'] for a in mine):
                     record.scores['delta_flag'] = True
                     self._event(chunk_id, 'review', f'unreviewed edit in version {version + 1}')
-            if inj >= self.policy.injection_block:
+            blocked = self.ledger.blocked(record.text_sha256)
+            if blocked:
+                self.ledger.put(record)
+                self.ledger.quarantine(chunk_id, blocked)
+                self._event(chunk_id, 'quarantine', f'{blocked}, at ingestion')
+            elif inj >= self.policy.injection_block and 'approved' not in record.scores:
                 if trust_tier in self.policy.block_tiers:
                     self.ledger.put(record)
                     self.ledger.quarantine(chunk_id, f'injection score {inj:.2f}')
@@ -99,6 +121,70 @@ class Shield:
             self.index.add(chunk_id, piece, vector, {'doc_id': doc_id, 'source_id': source_id, **(metadata or {})})
             records.append(record)
         return records
+
+    def _hold(self, doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, additions, version):
+        p, digest = self.policy, sha256(text)
+        waiting = self.ledger.held(doc_id)
+        if waiting and waiting[0]['text_sha256'] == digest:
+            return  # the same edit sent again, still waiting
+        earlier = self.ledger.hold_status(doc_id, digest)
+        if earlier and earlier[0] == 'rejected':
+            self._event(doc_id, 'reject', f'edit sent again after {earlier[1] or "a reviewer"} rejected it; not served')
+            return
+        flagged = [a for a in additions if a['flag']]
+        inj, off = max(a['injection'] for a in flagged), max(a['offtopic'] for a in flagged)
+        why = [f'instructions {inj:.2f}'] if inj >= p.delta_injection else []
+        why += [f'off-topic {off:.2f}'] if off >= p.delta_offtopic else []
+        why += ['hidden characters'] if any(a['hidden'] for a in flagged) else []
+        reason = f"edit held for review: {len(flagged)} of {len(additions)} added passages flagged ({', '.join(why)})"
+        self.ledger.hold(doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata or {}, additions, reason)
+        self._event(doc_id, 'hold', f'{reason}; version {version} still serves')
+
+    # Review ------------------------------------------------------------------------------------
+
+    def held(self):
+        """Edits waiting for review: who sent each one, its text and hash, and what every added passage scored."""
+        return self.ledger.held()
+
+    def _reviewed_hold(self, doc_id, text_sha256):
+        holds = self.ledger.held(doc_id)
+        if not holds:
+            raise LookupError(f'no edit to {doc_id} is waiting for review')
+        hold = holds[0]
+        # Hash the stored text again, not the stored hash: approval must cover the text that will be served.
+        if text_sha256 is not None and sha256(hold['text']) != text_sha256:
+            raise ValueError(f'the held edit to {doc_id} is not the version that was reviewed')
+        return hold
+
+    def approve(self, doc_id, text_sha256=None, reviewer=None):
+        """Serve a held edit. Pass the hash of the version the reviewer read, so a different one is never served.
+
+        Its chunks are signed as usual, and the passages the reviewer read are marked approved: they are served without
+        the classifier and edit warnings, which a person has now checked. Hidden characters and outliers still count."""
+        hold = self._reviewed_hold(doc_id, text_sha256)
+        records = self._ingest(doc_id, hold['text'], hold['source_id'], hold['trust_tier'], hold['chunk_size'], hold['overlap'],
+                               hold['metadata'], approved_by=reviewer or 'a reviewer')
+        self.ledger.close_hold(doc_id, 'approved', reviewer)
+        self._event(doc_id, 'approve', f'held edit approved by {reviewer or "a reviewer"}')
+        return records
+
+    def reject(self, doc_id, text_sha256=None, reviewer=None):
+        """Discard a held edit and keep serving the previous version. The same text sent again stays rejected."""
+        self._reviewed_hold(doc_id, text_sha256)
+        self.ledger.close_hold(doc_id, 'rejected', reviewer)
+        self._event(doc_id, 'reject', f'held edit rejected by {reviewer or "a reviewer"}; the previous version still serves')
+
+    def quarantine(self, chunk_id, text_sha256=None, reviewer=None):
+        """Stop serving a chunk now. Its exact text stays quarantined if it is ingested again, as nightly syncs do."""
+        record = self.ledger.get(chunk_id)[0]
+        if record is None:
+            raise LookupError(f'{chunk_id} has no signed record')
+        if text_sha256 is not None and record.text_sha256 != text_sha256:
+            raise ValueError(f'{chunk_id} changed after it was reviewed')
+        reason = f'quarantined by {reviewer or "a reviewer"}'
+        self.ledger.quarantine(chunk_id, reason)
+        self.ledger.block_text(record.text_sha256, chunk_id, reason, reviewer)
+        self._event(chunk_id, 'quarantine', reason)
 
     def _score_additions(self, added, previous):
         """Score each added passage on its own: injection language, and how unrelated it is to the earlier version."""
@@ -174,7 +260,8 @@ class Shield:
         if status != 'verified':
             return {'action': 'drop', 'reason': status, 'trust': 0.0}
         p, tier = self.policy, record.trust_tier
-        inj = record.scores.get('injection', 0.0)
+        approved = 'approved' in record.scores  # a reviewer read this passage and approved the edit
+        inj = 0.0 if approved else record.scores.get('injection', 0.0)
         blockable = tier in p.block_tiers
         if inj >= p.injection_block and blockable:
             return {'action': 'drop', 'reason': f'injection {inj:.2f}', 'trust': 0.0}
@@ -200,7 +287,7 @@ class Shield:
             if blockable:
                 return {'action': 'drop', 'reason': hidden.describe(record.scores['hidden']), 'trust': 0.0}
             reasons.append(hidden.describe(record.scores['hidden']))
-        if record.scores.get('delta_flag'):
+        if record.scores.get('delta_flag') and not approved:
             d = record.scores['delta']
             if blockable:
                 return {'action': 'drop', 'reason': 'unreviewed suspicious edit', 'trust': 0.0}
@@ -250,4 +337,4 @@ class Shield:
         return kept[:k]
 
     def _event(self, chunk_id, action, reason):
-        self.events.append((time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), chunk_id, action, reason))
+        self.events.append((now(), chunk_id, action, reason))

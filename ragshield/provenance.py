@@ -24,6 +24,10 @@ def sha256(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
+def now():
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
 @dataclass
 class ChunkRecord:
     chunk_id: str
@@ -84,6 +88,13 @@ class Ledger:
             create table if not exists chunks(chunk_id text primary key, record text not null, quarantined integer default 0, reason text);
             create table if not exists versions(doc_id text not null, version integer not null, paragraphs text not null,
               ingested_at text not null, primary key(doc_id, version));
+            create table if not exists held(id integer primary key, doc_id text not null, text text not null, text_sha256 text not null,
+              source_id text not null, trust_tier text not null, chunk_size integer not null, overlap integer not null,
+              metadata text not null, additions text not null, reason text not null, held_at text not null,
+              status text not null default 'held', reviewer text, decided_at text);
+            create unique index if not exists one_hold_per_doc on held(doc_id) where status = 'held';
+            create table if not exists blocked(text_sha256 text primary key, chunk_id text not null, reason text not null,
+              reviewer text, blocked_at text not null);
         ''')
         self._keys = {}
 
@@ -133,7 +144,7 @@ class Ledger:
         version = self.latest_version(doc_id)[0] + 1
         with self.lock, self.db:
             self.db.execute('insert into versions(doc_id, version, paragraphs, ingested_at) values(?,?,?,?)',
-                            (doc_id, version, json.dumps(paragraphs), time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())))
+                            (doc_id, version, json.dumps(paragraphs), now()))
         return version
 
     def delete_doc_chunks(self, doc_id):
@@ -142,6 +153,48 @@ class Ledger:
 
     def records(self):
         return [ChunkRecord(**json.loads(r[0])) for r in self.db.execute('select record from chunks order by chunk_id')]
+
+    # Review: versions held back until someone approves them, and text a reviewer quarantined -------------------------
+
+    def hold(self, doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, additions, reason):
+        """Store a version for review in place of serving it. A newer held version of the same document replaces it."""
+        with self.lock, self.db:
+            self.db.execute("update held set status='superseded', decided_at=? where doc_id=? and status='held'", (now(), doc_id))
+            self.db.execute('''insert into held(doc_id, text, text_sha256, source_id, trust_tier, chunk_size, overlap, metadata,
+                                 additions, reason, held_at) values(?,?,?,?,?,?,?,?,?,?,?)''',
+                            (doc_id, text, sha256(text), source_id, trust_tier, chunk_size, overlap, json.dumps(metadata, default=str),
+                             json.dumps(additions), reason, now()))
+
+    def held(self, doc_id=None):
+        """Versions waiting for review, at most one per document, oldest first."""
+        query = "select * from held where status='held'" + (' and doc_id=?' if doc_id else '') + ' order by id'
+        cursor = self.db.execute(query, (doc_id,) if doc_id else ())
+        names = [c[0] for c in cursor.description]
+        rows = [dict(zip(names, row)) for row in cursor.fetchall()]
+        for row in rows:
+            row['metadata'], row['additions'] = json.loads(row['metadata']), json.loads(row['additions'])
+        return rows
+
+    def hold_status(self, doc_id, text_sha256):
+        """The last review outcome for this exact version of the document, or None."""
+        row = self.db.execute('select status, reviewer from held where doc_id=? and text_sha256=? order by id desc limit 1',
+                              (doc_id, text_sha256)).fetchone()
+        return row if row else None
+
+    def close_hold(self, doc_id, status, reviewer=None):
+        with self.lock, self.db:
+            return self.db.execute("update held set status=?, reviewer=?, decided_at=? where doc_id=? and status='held'",
+                                   (status, reviewer, now(), doc_id)).rowcount
+
+    def block_text(self, text_sha256, chunk_id, reason, reviewer=None):
+        with self.lock, self.db:
+            self.db.execute('insert or replace into blocked(text_sha256, chunk_id, reason, reviewer, blocked_at) values(?,?,?,?,?)',
+                            (text_sha256, chunk_id, reason, reviewer, now()))
+
+    def blocked(self, text_sha256):
+        """Why a reviewer quarantined this exact text, or None."""
+        row = self.db.execute('select reason from blocked where text_sha256=?', (text_sha256,)).fetchone()
+        return row[0] if row else None
 
     def verify(self, chunk_id, text):
         """Return (status, record). Status is one of: verified, unknown, tampered, bad_signature, untrusted_key, quarantined."""
@@ -164,4 +217,4 @@ def new_record(chunk_id, doc_id, source_id, trust_tier, position, text):
     if trust_tier not in TIERS:
         raise ValueError(f'trust_tier must be one of {list(TIERS)}')
     return ChunkRecord(chunk_id=chunk_id, doc_id=doc_id, source_id=source_id, trust_tier=trust_tier, position=position,
-                       text_sha256=sha256(text), ingested_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), key_id='')
+                       text_sha256=sha256(text), ingested_at=now(), key_id='')
