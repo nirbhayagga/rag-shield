@@ -33,7 +33,7 @@ from pathlib import Path
 
 import numpy as np
 
-from common import HERE, H, SYSTEM, SYSTEM_LABELS, CachedEmbedder, CachedInjection, Generator, add_eval_args, eval_doc_ids, label, make_shield, out_path, outcome, outcome_counts, vandelay
+from common import HERE, H, SYSTEM, SYSTEM_LABELS, CachedContradiction, CachedEmbedder, CachedInjection, Generator, add_eval_args, eval_doc_ids, label, make_shield, out_path, outcome, outcome_counts, vandelay
 from ragshield import delta
 from ragshield.shield import Policy
 
@@ -49,6 +49,8 @@ parser.add_argument('--out', default=None, help='override the results path (smok
 parser.add_argument('--policy', choices=('shipped', 'warn-outliers'), default='shipped')
 parser.add_argument('--labels', action='store_true', help='show trust labels to the generator')
 parser.add_argument('--hold', action='store_true', help='hold flagged edits for review (the SDK default)')
+parser.add_argument('--contradiction', nargs='?', const='default', default=None,
+                    help='also flag edits that contradict the page (optionally: the NLI model id)')
 add_eval_args(parser)
 args = parser.parse_args()
 
@@ -56,6 +58,9 @@ docs, questions = vandelay()
 by_id = {d.doc_id: d for d in docs}
 eligible = eval_doc_ids(docs, args.split)
 embedder, injection = CachedEmbedder(device=args.device), CachedInjection(args.injection_model, device=args.device)
+contradiction = None
+if args.contradiction:
+    contradiction = CachedContradiction(device=args.device) if args.contradiction == 'default' else CachedContradiction(args.contradiction, args.device)
 rng = random.Random(args.seed)
 PHRASINGS = ['{s}', 'Note: {s}', 'Correction to earlier records: {s}', 'Summary of the current record: {s}', 'For reference, {s}']
 
@@ -94,7 +99,7 @@ def build(scenario, only=None, hold=args.hold):
     """only: for page edits, plant just this attack set. An edit is one author's change, and putting both sets in one
     edit would let the off-topic NQ texts get our on-topic ones flagged or held with them."""
     policy = Policy(hold_edits=hold) if args.policy == 'shipped' else Policy(outlier_block_tiers=(), hold_edits=hold)
-    shield = make_shield(embedder, injection, policy)
+    shield = make_shield(embedder, injection, policy, contradiction=contradiction)
     ingest_corpus(shield)
     clean_ids = list(shield.index.ids)
     if scenario == 'T2_low_trust_upload':
@@ -150,6 +155,7 @@ gen = Generator(args.generator, args.device, args.max_new_tokens, SYSTEM_LABELS 
 results = {'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'seed': args.seed, 'k': args.k,
            'injection_model': args.injection_model, 'split': args.split, 'generator': args.generator,
            'policy': args.policy, 'labels': args.labels, 'hold_edits': args.hold,
+           'contradiction': contradiction.name if contradiction else None,
            'cases': {s: sum(c['set'] == s for c in cases) for s in ('vandelay', 'nq')},
            'source': 'sleeepeer/PoisonedRAG results/adv_targeted_results/nq.json (MIT); data/vandelay/poison_targets.json (ours)'}
 rows = []
@@ -226,7 +232,7 @@ for scenario in ('T2_low_trust_upload', 'T3n_trusted_new_page', 'T3e_trusted_pag
         summary.setdefault(scenario, {})[s] = entry
 results['summary'] = summary
 results['runtime_sec'] = round(time.time() - t0, 1)
-stem = 'poisonedrag' + ('-warn-outliers' if args.policy != 'shipped' else '') + ('-labels' if args.labels else '') + ('-hold' if args.hold else '')
+stem = 'poisonedrag' + ('-warn-outliers' if args.policy != 'shipped' else '') + ('-labels' if args.labels else '') + ('-hold' if args.hold else '') + ('-contradiction' if contradiction else '')
 out = Path(args.out) if args.out else out_path(stem, args)
 out.write_text(json.dumps({**results, 'rows': rows, 'clean_answers': {c['id']: c.get('clean_answer') for c in cases} if gen else None}, indent=2))
 print(json.dumps(results, indent=2))

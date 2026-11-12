@@ -17,7 +17,7 @@ try:
     import eval_harness as H  # noqa: E402  (private, not distributed: see the README)
 except ImportError:
     H = None
-from ragshield.detectors import INJECTION_MODEL, CombinedInjection, OutlierDetector  # noqa: E402
+from ragshield.detectors import CONTRADICTION_MODEL, INJECTION_MODEL, CombinedInjection, OutlierDetector  # noqa: E402
 from ragshield.index import DEFAULT_MODEL, VectorIndex  # noqa: E402
 from ragshield.provenance import Ledger, Signer, sha256  # noqa: E402
 from ragshield.shield import Policy, Shield  # noqa: E402
@@ -177,6 +177,28 @@ class CachedInjection:
         return np.array([self.cache[k] for k in keys], dtype=np.float32)
 
 
+class CachedContradiction:
+    """The contradiction check with its (contradiction, support) probabilities cached on disk, keyed by model and pair."""
+
+    def __init__(self, model=CONTRADICTION_MODEL, device=None):
+        self.name, self.device, self._model = model, device, None
+        self.path = CACHE / f"nli2-{model.replace('/', '_')}.json"
+        self.cache = json.loads(self.path.read_text()) if self.path.exists() else {}
+
+    def score(self, pairs):
+        keys = [sha256(premise + '\x00' + hypothesis) for premise, hypothesis in pairs]
+        missing = [(pair, k) for pair, k in zip(pairs, keys) if k not in self.cache]
+        if missing:
+            if self._model is None:
+                from ragshield.detectors import ContradictionDetector
+                self._model = ContradictionDetector(self.name, self.device)
+            for (_, k), row in zip(missing, self._model.score([pair for pair, _ in missing])):
+                self.cache[k] = [float(row[0]), float(row[1])]
+            CACHE.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(self.cache))
+        return np.array([self.cache[k] for k in keys], dtype=np.float32).reshape(len(keys), 2)
+
+
 OUTCOMES = ('served_silently', 'served_with_warning', 'dropped', 'outranked', 'held')
 
 
@@ -197,9 +219,9 @@ def outcome_counts(outcomes, n):
     return counts
 
 
-def make_shield(embedder, injection, policy=None, target_fpr=0.02):
+def make_shield(embedder, injection, policy=None, target_fpr=0.02, contradiction=None):
     return Shield(Ledger(), Signer.generate(), embedder, VectorIndex(), injection=injection,
-                  outlier=OutlierDetector(target_fpr=target_fpr), policy=policy or Policy())
+                  outlier=OutlierDetector(target_fpr=target_fpr), policy=policy or Policy(), contradiction=contradiction)
 
 
 # Answer generation ------------------------------------------------------------------------------
