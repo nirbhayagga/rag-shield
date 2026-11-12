@@ -97,8 +97,10 @@ def render(summary, chunks, top=10):
     lines += ['## How to read this', '',
               'Flags are not verdicts. Security text (logs, incident reports, EDR exports) scores high on generic injection classifiers;',
               'that is why a trusted chunk is never deleted on a score alone. The numbers show how much of your index a reviewer would',
-              'need to look at once, and how much would be auto-checked after that. Edits made after this scan are scored on what',
-              'they add, which is much more sensitive than scoring whole pages (23% → 98% of poisoned edits on held-out documents).', '']
+              'need to look at once, and how much would be auto-checked after that. Edits made after this scan are scored only on',
+              'what they add, which catches far more planted instructions than scoring whole pages, and a flagged edit waits for',
+              'review while the previous version keeps serving.', '',
+              'Want a second pair of eyes on these results? Design partners get a free guided review: https://ragshield.dev/#partner', '']
     return '\n'.join(lines)
 
 
