@@ -2,6 +2,7 @@
 import numpy as np
 
 INJECTION_MODEL = 'protectai/deberta-v3-base-prompt-injection-v2'  # Apache-2.0; Llama Prompt Guard 2 is an optional gated alternative
+CONTRADICTION_MODEL = 'cross-encoder/nli-deberta-v3-base'  # Apache-2.0
 
 
 class InjectionDetector:
@@ -30,6 +31,28 @@ class InjectionDetector:
             p = next((d['score'] for d in labels if d['label'].upper() in ('INJECTION', 'LABEL_1', 'MALICIOUS')), 0.0)
             out[i] = max(out[i], p)
         return out
+
+
+class ContradictionDetector:
+    """Probability that one passage contradicts another, from a natural-language-inference (NLI) model.
+
+    The shield uses it on edits. A planted false statement ("gateway GW-07 listens on port 8443" on a page that says 443)
+    carries no instruction, so the injection classifier passes it; this is the check that can hold it. See
+    Shield._contradictions for which sentences are compared."""
+
+    def __init__(self, model=CONTRADICTION_MODEL, device=None):
+        from transformers import pipeline
+        self.pipe = pipeline('text-classification', model=model, device=device, truncation=True, max_length=512, top_k=None)
+        self.name = model
+
+    def score(self, pairs, batch=16):
+        """pairs: (premise, hypothesis). Returns an array with one row per pair: the probability that the hypothesis
+        contradicts the premise, and the probability that the premise supports (entails) it."""
+        if not pairs:
+            return np.zeros((0, 2), dtype=np.float32)
+        out = self.pipe([{'text': premise, 'text_pair': hypothesis} for premise, hypothesis in pairs], batch_size=batch)
+        prob = lambda labels, name: next((d['score'] for d in labels if d['label'].lower().startswith(name)), 0.0)
+        return np.array([[prob(labels, 'contradict'), prob(labels, 'entail')] for labels in out], dtype=np.float32)
 
 
 class CombinedInjection:

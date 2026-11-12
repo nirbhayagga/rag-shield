@@ -37,7 +37,9 @@ def snapshot(shield, previews=False):
                 'action': 'hold', 'reason': hold['reason'],
                 'scores': {'added passages': len(added), 'flagged': sum(a['flag'] for a in added),
                            'instructions': max(a['injection'] for a in added), 'off-topic': max(a['offtopic'] for a in added),
-                           'hidden characters': sum(a['hidden'] for a in added)}}
+                           'hidden characters': sum(a['hidden'] for a in added),
+                           **({'contradicts the page': max(a['contradiction'] for a in added if 'contradiction' in a)}
+                              if any('contradiction' in a for a in added) else {})}}
         if previews:  # what the edit adds, which is what the reviewer has to judge
             item['preview'] = '\n\n'.join(('[flagged] ' if a['flag'] else '') + a['text'] for a in added)[:PREVIEW_CHARS]
         items.append(item)

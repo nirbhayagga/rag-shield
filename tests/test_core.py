@@ -578,3 +578,56 @@ class QuarantineTests(unittest.TestCase):
         with self.assertRaises(LookupError):
             self.shield.quarantine('missing::0')
         self.assertEqual(len(self.shield.retrieve('backups nightly', 1)), 1)
+
+
+class StubContradiction:
+    """Port 8443 contradicts a page that says port 443, and 'listens on port 443' is supported by it."""
+
+    def score(self, pairs):
+        return np.array([[0.97 if 'port 443' in premise and '8443' in added else 0.02,
+                          0.95 if 'port 443' in premise and 'listens on port 443' in added else 0.01] for premise, added in pairs],
+                        np.float32)
+
+
+class FailingContradiction:
+    def score(self, pairs):
+        raise RuntimeError('model unavailable')
+
+
+class ContradictionTests(unittest.TestCase):
+    PAGE = ('VPN access runbook.\n\nContractors connect through gateway GW-07 on port 443.\n\n'
+            'Tokens are reissued by the service desk after identity checks.')
+    MOVED = PAGE + '\n\nContractors now connect through GW-07 on port 8443.'
+    AGREES = PAGE + '\n\nGW-07 listens on port 443 for contractors.'
+    NO_NAME = PAGE + '\n\nContractors now connect on port 8443.'
+
+    def shield(self, contradiction):
+        shield = Shield(Ledger(), Signer.generate(), StubEmbedder(), VectorIndex(), injection=StubInjection(),
+                        contradiction=contradiction)
+        shield.policy.delta_offtopic = 2.0  # only the contradiction check can flag these edits
+        shield.ingest('runbook', self.PAGE, 'wiki', 'high')
+        return shield
+
+    def test_an_edit_that_contradicts_the_page_is_held_with_the_sentence_it_contradicts(self):
+        shield = self.shield(StubContradiction())
+        self.assertEqual(shield.ingest('runbook', self.MOVED, 'wiki', 'high'), [])
+        (hold,) = shield.held()
+        self.assertIn('contradicts the previous version 0.97', hold['reason'])
+        self.assertIn('GW-07 on port 443', hold['additions'][0]['contradicts'])
+
+    def test_an_edit_the_page_supports_is_served(self):
+        shield = self.shield(StubContradiction())
+        self.assertTrue(shield.ingest('runbook', self.AGREES, 'wiki', 'high'))
+        self.assertEqual(shield.held(), [])
+
+    def test_a_sentence_without_an_identifier_is_not_checked(self):
+        shield = self.shield(StubContradiction())
+        self.assertTrue(shield.ingest('runbook', self.NO_NAME, 'wiki', 'high'))
+        scores = [shield.ledger.get(cid)[0].scores for cid in shield.index.ids]
+        self.assertIn(0.0, [s['delta']['contradiction'] for s in scores if 'delta' in s])
+
+    def test_without_a_detector_or_when_it_fails_the_edit_is_scored_as_before(self):
+        self.assertTrue(self.shield(None).ingest('runbook', self.MOVED, 'wiki', 'high'))
+        shield = self.shield(FailingContradiction())
+        self.assertTrue(shield.ingest('runbook', self.MOVED, 'wiki', 'high'))
+        self.assertIn('unscored', [e[2] for e in shield.events])

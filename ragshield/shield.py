@@ -3,6 +3,7 @@
 ingest(): chunk -> hash -> detector scores -> sign -> ledger -> index (quarantined chunks are indexed but never served).
 A flagged edit is held instead: the previous version keeps serving until a reviewer approves or rejects the new one.
 retrieve(): over-fetch from the index, verify each chunk against the ledger, apply the policy, re-rank by similarity x trust."""
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -11,6 +12,8 @@ from . import chunking, delta, hidden
 from .provenance import TIERS, new_record, now, sha256
 
 UNSCORED = 'unscored: no injection score'
+# Names of specific things in a page: hosts, tickets, CVEs, versions (a token with both a capital letter and a digit)
+IDENTIFIER = re.compile(r'\b(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Z])[A-Z0-9][A-Za-z0-9-]{3,}\b')
 
 
 @dataclass
@@ -25,6 +28,12 @@ class Policy:
     min_rank: float = 0.25          # chunks from block_tiers whose ranking weight falls below this are dropped
     delta_injection: float = 0.50   # an added passage scored on its own (no dilution by the surrounding page)
     delta_offtopic: float = 0.45    # 1 - max cosine to the previous version; calibrated on benign edits in experiment 3
+    # Optional contradiction check (Shield(contradiction=ContradictionDetector())): an added sentence that names an
+    # identifier (a host, ticket, CVE, ...) is compared with the most similar sentences of the previous version that name
+    # the same one. It is flagged when one of them contradicts it and none of them supports it.
+    delta_contradiction: float = 0.90
+    contradiction_candidates: int = 5   # most similar sentences of the previous version to consider for each added sentence
+    contradiction_support: float = 0.50  # an added sentence that a nearby sentence supports this strongly isn't flagged
     overfetch: int = 3              # fetch k * overfetch candidates before filtering, and more if too few survive
     max_candidates: int = 500       # stop there and log a 'starved' event: each candidate costs a signature check
     lockdown: bool = False          # incident kill switch: serve only verified chunks with no warning at all
@@ -48,9 +57,10 @@ class Policy:
 
 
 class Shield:
-    def __init__(self, ledger, signer, embedder, index, injection=None, outlier=None, policy=None):
+    def __init__(self, ledger, signer, embedder, index, injection=None, outlier=None, policy=None, contradiction=None):
         self.ledger, self.signer, self.embedder, self.index = ledger, signer, embedder, index
         self.injection, self.outlier, self.policy = injection, outlier, policy or Policy()
+        self.contradiction = contradiction  # optional ContradictionDetector: also flag edits that contradict the page
         ledger.trust_key(signer)
         self.events = []  # (time, chunk_id, action, reason): the audit trail the dashboard shows
 
@@ -97,6 +107,8 @@ class Shield:
             if mine:
                 record.scores['delta'] = {'injection': max(a['injection'] for a in mine),
                                           'offtopic': max(a['offtopic'] for a in mine), 'added': len(mine)}
+                if any('contradiction' in a for a in mine):
+                    record.scores['delta']['contradiction'] = max(a.get('contradiction', 0.0) for a in mine)
                 if approved_by is not None:
                     record.scores['approved'] = {'by': approved_by, 'at': now()}
                 elif any(a['flag'] for a in mine):
@@ -136,6 +148,8 @@ class Shield:
         why = [f'instructions {inj:.2f}'] if inj >= p.delta_injection else []
         why += [f'off-topic {off:.2f}'] if off >= p.delta_offtopic else []
         why += ['hidden characters'] if any(a['hidden'] for a in flagged) else []
+        con = max(a.get('contradiction', 0.0) for a in flagged)
+        why += [f'contradicts the previous version {con:.2f}'] if con >= p.delta_contradiction else []
         reason = f"edit held for review: {len(flagged)} of {len(additions)} added passages flagged ({', '.join(why)})"
         self.ledger.hold(doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata or {}, additions, reason)
         self._event(doc_id, 'hold', f'{reason}; version {version} still serves')
@@ -198,9 +212,52 @@ class Shield:
         scored = self._injection([seen for seen, _ in inspected], 'an edit')
         inj = scored if scored is not None else np.zeros(len(added))
         hid = [hidden.total(h) if p.hidden_check else 0 for _, h in inspected]
-        return [{'text': t, 'offtopic': round(float(o), 4), 'injection': round(float(s), 4), 'hidden': n,
-                 'flag': bool(s >= p.delta_injection or o >= p.delta_offtopic or n > 0)}
-                for t, o, s, n in zip(added, offtopic, inj, hid)]
+        out = [{'text': t, 'offtopic': round(float(o), 4), 'injection': round(float(s), 4), 'hidden': n,
+                'flag': bool(s >= p.delta_injection or o >= p.delta_offtopic or n > 0)}
+               for t, o, s, n in zip(added, offtopic, inj, hid)]
+        if self.contradiction is not None:
+            for a, (c, premise) in zip(out, self._contradictions([seen for seen, _ in inspected], previous)):
+                a['contradiction'] = round(float(c), 4)
+                if c >= p.delta_contradiction:
+                    a['flag'], a['contradicts'] = True, premise
+        return out
+
+    def _contradictions(self, added, previous):
+        """For each added passage: the strongest contradiction between one of its sentences and the previous version, and
+        the sentence it contradicts.
+
+        Only sentences that name an identifier are checked, and only against page sentences that name the same one: an
+        NLI model reads two statements about different things (another host, another incident) as a contradiction, and
+        pages are full of those. A sentence that a nearby page sentence supports is not flagged. Each page sentence is read
+        with its neighbours, so a line of a table or list keeps some context."""
+        sentences = [s for para in previous for s in delta.sentences(para)]
+        checks = []  # (passage index, added sentence, its identifiers)
+        for i, text in enumerate(added):
+            for sentence in delta.sentences(text):
+                names = IDENTIFIER.findall(sentence)
+                if names and not sentence.rstrip().endswith('?'):
+                    checks.append((i, sentence, set(names)))
+        best = [(0.0, None)] * len(added)
+        if not sentences or not checks:
+            return best
+        windows = [' '.join(sentences[max(0, j - 1):j + 2]) for j in range(len(sentences))]
+        page_names = [set(IDENTIFIER.findall(w)) for w in windows]
+        similar = np.argsort(-(self.embedder.passages([c[1] for c in checks]) @ self.embedder.passages(sentences).T), axis=1)
+        pairs, owners = [], []
+        for n, ((_, sentence, _), row) in enumerate(zip(checks, similar[:, :self.policy.contradiction_candidates])):
+            pairs += [(windows[j], sentence) for j in row]
+            owners += [(n, j) for j in row]
+        try:
+            probs = self.contradiction.score(pairs)
+        except Exception as error:  # like the classifier: a failure must not stop ingestion
+            self._event('-', 'unscored', f'contradiction check failed on an edit: {type(error).__name__}')
+            return best
+        supported = {n for (n, _), (_, entail) in zip(owners, probs) if entail >= self.policy.contradiction_support}
+        for (n, j), (contra, _) in zip(owners, probs):
+            i, _, names = checks[n]
+            if n not in supported and names & page_names[j] and contra > best[i][0]:
+                best[i] = (float(contra), windows[j])
+        return best
 
     def _injection(self, texts, what):
         """Injection scores, or None when there's no classifier or it fails. Those chunks are labeled unscored, never passed as safe."""
@@ -291,7 +348,8 @@ class Shield:
             d = record.scores['delta']
             if blockable:
                 return {'action': 'drop', 'reason': 'unreviewed suspicious edit', 'trust': 0.0}
-            reasons.append(f"unreviewed edit (off-topic {d['offtopic']:.2f}, instructions {d['injection']:.2f})")
+            contradicts = f", contradicts the page {d['contradiction']:.2f}" if d.get('contradiction', 0.0) >= p.delta_contradiction else ''
+            reasons.append(f"unreviewed edit (off-topic {d['offtopic']:.2f}, instructions {d['injection']:.2f}{contradicts})")
         if tier == 'low':
             reasons.append('low-trust source')
         if p.lockdown and reasons:
