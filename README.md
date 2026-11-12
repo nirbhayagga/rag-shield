@@ -15,7 +15,7 @@ leaves your machine.
 | Ingestion signer | `ragshield/provenance.py` | SHA-256 + Ed25519 signature per chunk, SQLite ledger, key revocation, document versions |
 | Delta scoring | `ragshield/delta.py`, `shield.py` | On re-ingestion, isolates new paragraphs (or new sentences in modified paragraphs) and scores only those. A flagged edit is held until someone approves or rejects it |
 | Hidden characters | `ragshield/hidden.py` | Finds invisible, tag, direction-control and look-alike characters; the classifier scores the cleaned text and the finding is its own reason. Ordinary multilingual text and emoji are left alone |
-| Detectors | `ragshield/detectors.py`, `shield.py` | Injection classifier (ProtectAI DeBERTa-v3 by default), an embedding-outlier model (LOF over bge-base) and a retrieval-frequency probe |
+| Detectors | `ragshield/detectors.py`, `shield.py` | Injection classifier (ProtectAI DeBERTa-v3 by default), an embedding-outlier model (LOF over bge-base), a retrieval-frequency probe, and an optional contradiction check for edits (an NLI model) |
 | Trust filter | `ragshield/shield.py` | Verifies each retrieved chunk, drops tampered/unknown/quarantined chunks, warns and queues suspicious trusted content, re-ranks by similarity × trust; `lockdown` kill switch |
 | Index | `ragshield/index.py`, `ragshield/adapters.py` | Built-in cosine index, or adapters for ChromaDB and pgvector |
 | Retrievers | `ragshield/integrations/` | Drop-in LangChain and LlamaIndex retrievers |
@@ -91,6 +91,28 @@ Pass the hash of the version the reviewer read: if the held text no longer match
 never covers text nobody saw. The passages a reviewer approved are served without the classifier and edit warnings.
 A rejected edit sent again stays rejected, and a newer version with nothing flagged replaces a held one. A
 quarantined chunk's exact text stays quarantined when the document is ingested again, as nightly syncs do.
+
+### Catch planted false statements (optional)
+
+```python
+from ragshield.detectors import ContradictionDetector
+
+shield = Shield(ledger, signer, Embedder(), VectorIndex(), injection=InjectionDetector(),
+                contradiction=ContradictionDetector())   # an NLI model, about 740 MB
+```
+
+A false statement planted by a trusted editor ("gateway GW-07 now listens on port 8443", on a page that says 443)
+contains no instruction and stays on topic, so the other checks pass it. With a contradiction detector, each added
+sentence that names an identifier (a host, ticket, CVE or version) is compared with the most similar sentences of the
+previous version that name the same identifier. The edit is held when one of them contradicts it and none of them
+supports it. Comparing only sentences about the same identifier matters: an NLI model reads two statements about
+different hosts or incidents as a contradiction, and without that rule it held 40% of ordinary edits.
+
+On the private corpus it held 12 of 25 planted false statements (46% of the edits), 7% of edits that restate the true
+answer, and 5% of other edits. With the other checks, the share of benign edits held went from 13.8% to 17.7%. It was
+tuned on those same statements, so treat this as a first result, not a rate. On public how-to docs it almost never runs:
+only 1 of 260 benign edits named an identifier. It doesn't check sentences without identifiers, or contradictions with
+other pages. That's why it is off by default.
 
 ### Try it
 
@@ -277,6 +299,8 @@ a message, and one unit test is skipped.
 | `poisonedrag.py` | Knowledge corruption (PoisonedRAG): planted false statements, at retrieval level or with a local generator answering |
 | `marker_attacks.py` | Indirect attacks from your own attack file (not distributed): a note planted in a page, success = a marker string in the model's answer. `attack_bipia.py` and `delta_edits.py` also take `--attacks` |
 | `finetune_injection.py` | Fine-tunes the injection classifier on a document-level split (`data/splits.json`); pipeline runs then use `--split test` |
+| `contradiction_edits.py` | The optional contradiction check on edits: planted false statements, true restatements and benign edits (`poisonedrag.py --contradiction` adds it there) |
+| `publish_model.py` | Uploads a fine-tune trained on public data alone to the Hugging Face Hub with its model card, then checks it loads |
 
 Results, briefly:
 
@@ -319,8 +343,10 @@ Results, briefly:
     the previous version answered instead: attack success fell from 98% to 0%.
   - **On-topic false statements from a trusted editor get through.** They were served silently 72% of the time as new
     pages (94 of 130 chunks) and 85% as page edits (63 of 74). None of the 26 edits was flagged, so holding changes
-    nothing for them (81% either way). Signing can't help when the editor is legitimate. That gap needs every trusted
-    edit reviewed, or claims checked against the rest of the corpus.
+    nothing for them (81% either way). Signing can't help when the editor is legitimate.
+  - **The optional contradiction check is a first step.** With it, 11 of the 16 page edits were held, and the false
+    statement reached the top 5 in 6 of 26 cases instead of 25 (retrieval level; an edit that planted several statements
+    was held when one of them was caught). New pages, and statements that name no identifier, are still open.
 
 GPU commands (an RTX 20xx has no fast bf16, so add `--precision fp16 --batch 8 --grad-accum 2` there):
 
