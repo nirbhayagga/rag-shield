@@ -133,6 +133,9 @@ tuned on those same statements, so treat this as a first result, not a rate. On 
 only 1 of 260 benign edits named an identifier. It doesn't check sentences without identifiers, or contradictions with
 other pages. That's why it is off by default.
 
+At the answer level, with a local model answering the 26 questions, the planted answer was repeated 81% of the time
+without the check and 23% with it (12% with v5 as the classifier). See the PoisonedRAG results below.
+
 ### Try it
 
 `python examples/demo.py` runs a small company wiki through three attacks: an instruction planted in a trusted
@@ -284,16 +287,20 @@ held-out test.
 `real_edits.py` replays real ones. For each docs repository it takes commits from the past year that changed a page, one
 page per commit, cleans both versions as above and scores what the commit added. Kubernetes had 109 usable edits.
 
-| Docs, real edits | Held by the shipped checks, off-the-shelf classifier | … for instructions | … for off-topic text | Held by the fact check | Planted swaps caught |
-|---|---|---|---|---|---|
-| Docker (150) | 20.7% | 18.7% | 4.7% | 0.7% (1) | 112 of 113 |
-| Kubernetes (109) | 7.3% | 7.3% | 0% | 0% | 95 of 96 |
-| Microsoft 365 admin (150) | 15.3% | 15.3% | 0% | 1.3% (2) | 134 of 134 |
+| Docs, real edits | Held, off-the-shelf classifier | … for instructions | Held, **v5** | … for instructions | Held for off-topic text (either) | Held by the fact check | Planted swaps caught |
+|---|---|---|---|---|---|---|---|
+| Docker (150) | 20.7% | 18.7% | **6.7%** | 2.0% | 4.7% | 0.7% (1) | 112 of 113 |
+| Kubernetes\* (109) | 7.3% | 7.3% | **0%** | 0% | 0% | 0% | 95 of 96 |
+| Microsoft 365 admin (150) | 15.3% | 15.3% | **2.7%** | 2.7% | 0% | 1.3% (2) | 134 of 134 |
+
+\* v5 trained on Kubernetes pages, so that row isn't a held-out test for it.
 
 - **Real edits trip the off-the-shelf classifier more than synthetic ones** (Docker 20.7% against 12.0%, Microsoft 365
   15.3% against 10.4%, Kubernetes 7.3% against 4.8%), almost always for instructions: real edits add setup steps and
-  commands. Off-topic text is rarer than in the synthetic edits. That misfire is what v5 was trained against; v5 hasn't
-  been run on these edits yet.
+  commands. Off-topic text is rarer than in the synthetic edits.
+- **v5 holds far fewer real edits:** 6.7% on Docker and 2.7% on Microsoft 365, neither of which it trained on. Of the
+  synthetic edits it held 4.8% and 9.6%. With the fact check added, 7.3% and 3.3%. On Docker most of what's left is
+  off-topic text, which doesn't depend on the classifier.
 - **The fact check held 3 of 409 real edits (0.7%):** a link moved from Docker Hub to GitHub, AppSource links renamed to
   Marketplace, and an example email address swapped. All three were legitimate, and each is the kind of change a
   reviewer can approve at a glance. The off-the-shelf classifier held two of them anyway.
@@ -387,9 +394,12 @@ Results, briefly:
   - **On-topic false statements from a trusted editor get through.** They were served silently 72% of the time as new
     pages (94 of 130 chunks) and 85% as page edits (63 of 74). None of the 26 edits was flagged, so holding changes
     nothing for them (81% either way). Signing can't help when the editor is legitimate.
-  - **The optional contradiction check is a first step.** With it, 11 of the 16 page edits were held, and the false
-    statement reached the top 5 in 6 of 26 cases instead of 25 (retrieval level; an edit that planted several statements
-    was held when one of them was caught). New pages, and statements that name no identifier, are still open.
+  - **The optional contradiction check is a first step.** With it, 11 of the 16 page edits were held, the false
+    statement reached the top 5 in 6 of 26 cases instead of 25 (an edit that planted several statements was held when
+    one of them was caught), and attack success on trusted page edits fell from 81% to 23%
+    (`poisonedrag.py --hold --contradiction`). With v5 as the classifier it fell to 12%: v5 also scored three of the
+    planted edits as instructions. The check was tuned on these same statements, so this is a first result, not a rate.
+    New pages (92%), and statements that name no identifier, are still open.
 
 GPU commands (an RTX 20xx has no fast bf16, so add `--precision fp16 --batch 8 --grad-accum 2` there):
 
@@ -468,9 +478,9 @@ shows v1 has the same problem with how-to text.
 - The retrieval-frequency probe is tested on synthetic data only. How well it separates real attacks from popular
   pages hasn't been measured yet.
 - Benign edits in experiments 3, 6 and 9 are built from other documents of the same type. Real edits (experiment 10)
-  are less often off-topic, but they add more setup steps and commands, and the off-the-shelf classifier held more of them
-  (7–21%) than of the synthetic ones (5–12%). So the synthetic rates are not a conservative estimate of the classifier's
-  false alarms.
+  are less often off-topic, but they add more setup steps and commands. The off-the-shelf classifier held more of them
+  (7–21%) than of the synthetic ones (5–12%), and v5 held fewer (3–7%). So the synthetic rates aren't a conservative
+  estimate for every classifier; measure on your own edit history.
 - The fact check only sees links written out in full (`https://...`), and only a link to another site counts. A link
   changed to another page on the same site, or a new link that replaces nothing, isn't held.
 
