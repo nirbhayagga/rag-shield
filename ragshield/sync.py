@@ -26,6 +26,7 @@ def snapshot(shield, previews=False):
         item = {'chunk_id': chunk_id, 'doc_id': record.doc_id if record else chunk_id.split('::')[0], 'text_sha256': sha256(text),
                 'source_id': record.source_id if record else 'unknown', 'trust_tier': record.trust_tier if record else 'unknown',
                 'ingested_at': record.ingested_at if record else None, 'key_id': record.key_id if record else None,
+                'editor': (record.editor or None) if record else None, 'version': (record.version or None) if record else None,
                 'action': decision['action'], 'reason': decision['reason'], 'scores': record.scores if record else {}}
         if previews:
             item['preview'] = text[:PREVIEW_CHARS]
@@ -34,13 +35,15 @@ def snapshot(shield, previews=False):
         added = hold['additions']
         item = {'chunk_id': hold['doc_id'], 'doc_id': hold['doc_id'], 'text_sha256': hold['text_sha256'],
                 'source_id': hold['source_id'], 'trust_tier': hold['trust_tier'], 'ingested_at': hold['held_at'], 'key_id': None,
-                'action': 'hold', 'reason': hold['reason'],
+                'editor': hold.get('editor'), 'version': None, 'action': 'hold', 'reason': hold['reason'],
                 'scores': {'added passages': len(added), 'flagged': sum(a['flag'] for a in added),
                            'instructions': max(a['injection'] for a in added), 'off-topic': max(a['offtopic'] for a in added),
                            'hidden characters': sum(a['hidden'] for a in added),
                            **({'contradicts the page': max(a['contradiction'] for a in added if 'contradiction' in a)}
-                              if any('contradiction' in a for a in added) else {})}}
-        if previews:  # what the edit adds, which is what the reviewer has to judge
+                              if any('contradiction' in a for a in added) else {}),
+                           **({'replaced facts': sum(len(a['facts']) for a in added if 'facts' in a)}
+                              if any('facts' in a for a in added) else {})}}
+        if previews:  # what the edit adds, which is what the reviewer has to judge (the reason says why it was flagged)
             item['preview'] = '\n\n'.join(('[flagged] ' if a['flag'] else '') + a['text'] for a in added)[:PREVIEW_CHARS]
         items.append(item)
     return {'items': items, 'events': [{'at': at, 'chunk_id': chunk_id, 'action': action, 'reason': reason}

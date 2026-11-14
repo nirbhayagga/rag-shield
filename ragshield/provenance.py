@@ -18,6 +18,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 TIERS = {'high': 1.0, 'medium': 0.7, 'low': 0.4}
 SIGNED_FIELDS = ('chunk_id', 'doc_id', 'source_id', 'trust_tier', 'position', 'text_sha256', 'ingested_at', 'key_id')
+# Signed whenever they are set. A record from before they existed still verifies, and setting or clearing one on a stored
+# record changes the signed bytes, so the signature no longer matches.
+OPTIONAL_SIGNED = ('version', 'editor')
 
 
 def sha256(text):
@@ -38,11 +41,15 @@ class ChunkRecord:
     text_sha256: str
     ingested_at: str
     key_id: str
+    version: int = 0   # the document version this chunk belongs to (Ledger.versions)
+    editor: str = ''   # who made that version, as the source system names them (a user ID or email); '' if not given
     signature: str = ''
     scores: dict = field(default_factory=dict)  # detector scores at ingestion; not signed, may be re-computed
 
     def canonical(self):
-        return json.dumps({k: getattr(self, k) for k in SIGNED_FIELDS}, sort_keys=True, separators=(',', ':')).encode()
+        fields = {k: getattr(self, k) for k in SIGNED_FIELDS}
+        fields.update({k: getattr(self, k) for k in OPTIONAL_SIGNED if getattr(self, k)})
+        return json.dumps(fields, sort_keys=True, separators=(',', ':')).encode()
 
 
 class Signer:
@@ -96,6 +103,10 @@ class Ledger:
             create table if not exists blocked(text_sha256 text primary key, chunk_id text not null, reason text not null,
               reviewer text, blocked_at text not null);
         ''')
+        for table in ('versions', 'held'):  # added after the first release candidate: upgrade older ledger files in place
+            if 'editor' not in {row[1] for row in self.db.execute(f'pragma table_info({table})')}:
+                with self.db:
+                    self.db.execute(f'alter table {table} add column editor text')
         self._keys = {}
 
     def trust_key(self, signer_or_public_raw):
@@ -140,12 +151,17 @@ class Ledger:
                               (doc_id,)).fetchone()
         return (row[0], json.loads(row[1])) if row else (0, [])
 
-    def add_version(self, doc_id, paragraphs):
+    def add_version(self, doc_id, paragraphs, editor=None):
         version = self.latest_version(doc_id)[0] + 1
         with self.lock, self.db:
-            self.db.execute('insert into versions(doc_id, version, paragraphs, ingested_at) values(?,?,?,?)',
-                            (doc_id, version, json.dumps(paragraphs), now()))
+            self.db.execute('insert into versions(doc_id, version, paragraphs, ingested_at, editor) values(?,?,?,?,?)',
+                            (doc_id, version, json.dumps(paragraphs), now(), editor))
         return version
+
+    def versions(self, doc_id):
+        """Every version of a document that was served, oldest first: when it was ingested and who made it."""
+        return [{'version': v, 'ingested_at': at, 'editor': editor} for v, at, editor in self.db.execute(
+            'select version, ingested_at, editor from versions where doc_id=? order by version', (doc_id,))]
 
     def delete_doc_chunks(self, doc_id):
         with self.lock, self.db:
@@ -156,14 +172,14 @@ class Ledger:
 
     # Review: versions held back until someone approves them, and text a reviewer quarantined -------------------------
 
-    def hold(self, doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, additions, reason):
+    def hold(self, doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, additions, reason, editor=None):
         """Store a version for review in place of serving it. A newer held version of the same document replaces it."""
         with self.lock, self.db:
             self.db.execute("update held set status='superseded', decided_at=? where doc_id=? and status='held'", (now(), doc_id))
             self.db.execute('''insert into held(doc_id, text, text_sha256, source_id, trust_tier, chunk_size, overlap, metadata,
-                                 additions, reason, held_at) values(?,?,?,?,?,?,?,?,?,?,?)''',
+                                 additions, reason, held_at, editor) values(?,?,?,?,?,?,?,?,?,?,?,?)''',
                             (doc_id, text, sha256(text), source_id, trust_tier, chunk_size, overlap, json.dumps(metadata, default=str),
-                             json.dumps(additions), reason, now()))
+                             json.dumps(additions), reason, now(), editor))
 
     def held(self, doc_id=None):
         """Versions waiting for review, at most one per document, oldest first."""
@@ -213,8 +229,10 @@ class Ledger:
         return ('quarantined' if quarantined else 'verified'), record
 
 
-def new_record(chunk_id, doc_id, source_id, trust_tier, position, text):
+def new_record(chunk_id, doc_id, source_id, trust_tier, position, text, version=0, editor=None):
     if trust_tier not in TIERS:
         raise ValueError(f'trust_tier must be one of {list(TIERS)}')
+    if editor is not None and not isinstance(editor, str):
+        raise TypeError('editor must be a string, such as a user ID or email from the source system')
     return ChunkRecord(chunk_id=chunk_id, doc_id=doc_id, source_id=source_id, trust_tier=trust_tier, position=position,
-                       text_sha256=sha256(text), ingested_at=now(), key_id='')
+                       text_sha256=sha256(text), ingested_at=now(), key_id='', version=version, editor=editor or '')

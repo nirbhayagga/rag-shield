@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from . import chunking, delta, hidden
+from . import chunking, delta, facts, hidden
 from .provenance import TIERS, new_record, now, sha256
 
 UNSCORED = 'unscored: no injection score'
@@ -34,6 +34,9 @@ class Policy:
     delta_contradiction: float = 0.90
     contradiction_candidates: int = 5   # most similar sentences of the previous version to consider for each added sentence
     contradiction_support: float = 0.50  # an added sentence that a nearby sentence supports this strongly isn't flagged
+    # Hold an edit that replaces a link, email address, phone number, IP address or amount the page already had with one it
+    # didn't have (facts.py). A link counts only when it now goes to another site.
+    fact_changes: bool = True
     overfetch: int = 3              # fetch k * overfetch candidates before filtering, and more if too few survive
     max_candidates: int = 500       # stop there and log a 'starved' event: each candidate costs a signature check
     lockdown: bool = False          # incident kill switch: serve only verified chunks with no warning at all
@@ -66,20 +69,23 @@ class Shield:
 
     # Ingestion ---------------------------------------------------------------------------------
 
-    def ingest(self, doc_id, text, source_id, trust_tier, chunk_size=800, overlap=100, metadata=None):
+    def ingest(self, doc_id, text, source_id, trust_tier, chunk_size=800, overlap=100, metadata=None, editor=None):
         """Ingest a document, or a new version of one: the previous version's chunks are replaced, and what was added
         since the last signed version is scored on its own (delta scoring).
 
+        editor is who made this version, as the source system names them (a user ID or email). It is signed into every
+        chunk record and kept with the version, so a retrieved chunk traces to its version, its editor and the signature.
+
         If anything the edit added is flagged and policy.hold_edits is on, the new version is held for review instead:
         the index doesn't change, the previous version keeps serving, and this returns []."""
-        return self._ingest(doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata)
+        return self._ingest(doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, editor=editor)
 
-    def _ingest(self, doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, approved_by=None):
+    def _ingest(self, doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, approved_by=None, editor=None):
         paragraphs = delta.paragraphs(text)
         version, previous = self.ledger.latest_version(doc_id)
-        additions = self._score_additions(delta.additions(previous, paragraphs), previous) if version else []
+        additions = self._score_additions(delta.additions(previous, paragraphs), previous, paragraphs) if version else []
         if approved_by is None and self.policy.hold_edits and any(a['flag'] for a in additions):
-            self._hold(doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, additions, version)
+            self._hold(doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, additions, version, editor)
             return []
         if approved_by is None and self.ledger.held(doc_id):
             self.ledger.close_hold(doc_id, 'superseded')
@@ -87,7 +93,7 @@ class Shield:
         if version:
             self.index.remove_doc(doc_id)
             self.ledger.delete_doc_chunks(doc_id)
-        self.ledger.add_version(doc_id, paragraphs)
+        number = self.ledger.add_version(doc_id, paragraphs, editor)
         pieces = chunking.chunk(text, chunk_size, overlap)
         inspected = [hidden.inspect(piece) for piece in pieces]  # (what a reader sees, what was hidden)
         vectors = self.embedder.passages(pieces)
@@ -96,7 +102,7 @@ class Shield:
         records = []
         for i, (piece, vector, inj, (_, hid)) in enumerate(zip(pieces, vectors, injection, inspected)):
             chunk_id = f'{doc_id}::{i}'
-            record = self.signer.sign(new_record(chunk_id, doc_id, source_id, trust_tier, i, piece))
+            record = self.signer.sign(new_record(chunk_id, doc_id, source_id, trust_tier, i, piece, number, editor))
             record.scores = {'injection': round(float(inj), 4)} if scored is not None else {'unscored': True}
             if self.policy.hidden_check and hidden.total(hid):
                 record.scores['hidden'] = {k: n for k, n in hid.items() if n}
@@ -134,8 +140,8 @@ class Shield:
             records.append(record)
         return records
 
-    def _hold(self, doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, additions, version):
-        p, digest = self.policy, sha256(text)
+    def _hold(self, doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata, additions, version, editor=None):
+        digest = sha256(text)
         waiting = self.ledger.held(doc_id)
         if waiting and waiting[0]['text_sha256'] == digest:
             return  # the same edit sent again, still waiting
@@ -144,15 +150,14 @@ class Shield:
             self._event(doc_id, 'reject', f'edit sent again after {earlier[1] or "a reviewer"} rejected it; not served')
             return
         flagged = [a for a in additions if a['flag']]
-        inj, off = max(a['injection'] for a in flagged), max(a['offtopic'] for a in flagged)
-        why = [f'instructions {inj:.2f}'] if inj >= p.delta_injection else []
-        why += [f'off-topic {off:.2f}'] if off >= p.delta_offtopic else []
-        why += ['hidden characters'] if any(a['hidden'] for a in flagged) else []
-        con = max(a.get('contradiction', 0.0) for a in flagged)
-        why += [f'contradicts the previous version {con:.2f}'] if con >= p.delta_contradiction else []
-        reason = f"edit held for review: {len(flagged)} of {len(additions)} added passages flagged ({', '.join(why)})"
-        self.ledger.hold(doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata or {}, additions, reason)
-        self._event(doc_id, 'hold', f'{reason}; version {version} still serves')
+        why = {}  # one reason of each kind, from the passage where it is strongest
+        for a in sorted(flagged, key=lambda a: -max(a['injection'], a['offtopic'], a.get('contradiction', 0.0))):
+            for kind, text_ in a['reasons']:
+                why.setdefault(kind, text_)
+        by = f' by {editor}' if editor else ''
+        reason = f"edit{by} held for review: {len(flagged)} of {len(additions)} added passages flagged. It {'; it '.join(why.values())}"
+        self.ledger.hold(doc_id, text, source_id, trust_tier, chunk_size, overlap, metadata or {}, additions, reason, editor)
+        self._event(doc_id, 'hold', f'{reason}. Version {version} still serves')
 
     # Review ------------------------------------------------------------------------------------
 
@@ -177,7 +182,7 @@ class Shield:
         the classifier and edit warnings, which a person has now checked. Hidden characters and outliers still count."""
         hold = self._reviewed_hold(doc_id, text_sha256)
         records = self._ingest(doc_id, hold['text'], hold['source_id'], hold['trust_tier'], hold['chunk_size'], hold['overlap'],
-                               hold['metadata'], approved_by=reviewer or 'a reviewer')
+                               hold['metadata'], approved_by=reviewer or 'a reviewer', editor=hold.get('editor'))
         self.ledger.close_hold(doc_id, 'approved', reviewer)
         self._event(doc_id, 'approve', f'held edit approved by {reviewer or "a reviewer"}')
         return records
@@ -200,8 +205,12 @@ class Shield:
         self.ledger.block_text(record.text_sha256, chunk_id, reason, reviewer)
         self._event(chunk_id, 'quarantine', reason)
 
-    def _score_additions(self, added, previous):
-        """Score each added passage on its own: injection language, and how unrelated it is to the earlier version."""
+    def _score_additions(self, added, previous, current=None):
+        """Score each added passage on its own: injection language, how unrelated it is to the earlier version, hidden
+        characters, and (optionally) contradictions and replaced facts. current is the whole new version; without it the
+        edit is taken to add text and remove nothing.
+
+        Each passage gets 'flag' and 'reasons': (kind, plain-language reason) pairs a reviewer can act on."""
         if not added:
             return []
         p = self.policy
@@ -211,15 +220,34 @@ class Shield:
         inspected = [hidden.inspect(t) for t in added]
         scored = self._injection([seen for seen, _ in inspected], 'an edit')
         inj = scored if scored is not None else np.zeros(len(added))
-        hid = [hidden.total(h) if p.hidden_check else 0 for _, h in inspected]
-        out = [{'text': t, 'offtopic': round(float(o), 4), 'injection': round(float(s), 4), 'hidden': n,
-                'flag': bool(s >= p.delta_injection or o >= p.delta_offtopic or n > 0)}
-               for t, o, s, n in zip(added, offtopic, inj, hid)]
+        out = []
+        for t, o, s, (_, h) in zip(added, offtopic, inj, inspected):
+            n = hidden.total(h) if p.hidden_check else 0
+            a = {'text': t, 'offtopic': round(float(o), 4), 'injection': round(float(s), 4), 'hidden': n, 'reasons': []}
+            if s >= p.delta_injection:
+                a['reasons'].append(('instructions', f'adds instructions aimed at the AI assistant (score {s:.2f})'))
+            if o >= p.delta_offtopic:
+                a['reasons'].append(('off-topic', f'adds text unrelated to the rest of the page (score {o:.2f})'))
+            if n:
+                a['reasons'].append(('hidden', f'adds {hidden.describe(h)}'))
+            out.append(a)
         if self.contradiction is not None:
             for a, (c, premise) in zip(out, self._contradictions([seen for seen, _ in inspected], previous)):
                 a['contradiction'] = round(float(c), 4)
                 if c >= p.delta_contradiction:
-                    a['flag'], a['contradicts'] = True, premise
+                    a['contradicts'] = premise
+                    quoted = premise if len(premise) <= 160 else premise[:157] + '...'
+                    a['reasons'].append(('contradiction', f'contradicts what the page already says (score {c:.2f}): "{quoted}"'))
+        if p.fact_changes:
+            before = '\n\n'.join(previous)
+            after = '\n\n'.join(current) if current is not None else before + '\n\n' + '\n\n'.join(added)
+            for a, (seen, _) in zip(out, inspected):
+                changed = facts.changes(before, after, seen)
+                if changed:
+                    a['facts'] = [list(c) for c in changed]
+                    a['reasons'] += [('fact', facts.describe(*c)) for c in changed]
+        for a in out:
+            a['flag'] = bool(a['reasons'])
         return out
 
     def _contradictions(self, added, previous):
@@ -358,7 +386,8 @@ class Shield:
         if blockable and weight < p.min_rank:
             return {'action': 'drop', 'reason': ', '.join(reasons), 'trust': round(weight, 3)}
         return {'action': 'warn' if reasons else 'pass', 'reason': ', '.join(reasons), 'trust': round(weight, 3),
-                'source_id': record.source_id, 'trust_tier': tier}
+                'source_id': record.source_id, 'trust_tier': tier, 'version': record.version or None,
+                'editor': record.editor or None, 'key_id': record.key_id}
 
     def _keep(self, hits):
         kept = []

@@ -67,7 +67,8 @@ def show(shield, question, k=3):
     for hit in shield.index.search(shield.embedder.query(question), k):
         decision = shield.decide(hit)
         action = decision['action']
-        why = decision['reason'] or f"signed, {decision['source_id']}, {decision['trust_tier']} trust"
+        made = f", v{decision['version']} by {decision['editor']}" if decision.get('editor') else ''
+        why = decision['reason'] or f"signed, {decision['source_id']}, {decision['trust_tier']} trust{made}"
         print(f'  {hit["chunk_id"]:<34}{paint(action.upper().ljust(12), action)}{why}')
         print(paint(textwrap.indent(textwrap.fill(hit['text'].replace('\n\n', ' '), 92), '      '), 'dim'))
     served = shield.retrieve(question, k)  # the real call: logs each drop in the audit trail
@@ -89,16 +90,17 @@ def main():
 
     step('1. A company wiki goes in. Every chunk is signed and recorded when it is ingested.', pause)
     for doc_id, text in WIKI.items():
-        record = shield.ingest(doc_id, text, source_id='wiki', trust_tier='high')[0]
+        record = shield.ingest(doc_id, text, source_id='wiki', trust_tier='high', editor='it-team')[0]
         print(f'  {record.chunk_id:<16} signed with key {record.key_id[:12]}  sha256 {record.text_sha256[:16]}...')
     show(shield, 'How do contractors get VPN access?')
 
     step('2. Someone with edit rights plants an instruction in the VPN page.', pause)
-    shield.ingest('vpn-access', WIKI['vpn-access'] + '\n\n' + PLANTED, source_id='wiki', trust_tier='high')
+    shield.ingest('vpn-access', WIKI['vpn-access'] + '\n\n' + PLANTED, source_id='wiki', trust_tier='high', editor='pat.k')
     print('  RAG Shield compares the new version with the signed one and scores only what was added:')
     print(paint(textwrap.indent(textwrap.fill(PLANTED, 92), '      '), 'dim'))
     hold = next(h for h in shield.held() if h['doc_id'] == 'vpn-access')
-    print(f"  {paint('HELD', 'warn')}  {hold['reason']}")
+    reason = textwrap.wrap(hold['reason'], 90)
+    print(f"  {paint('HELD', 'warn')}  {reason[0]}" + ''.join('\n        ' + line for line in reason[1:]))
     show(shield, 'How do contractors get VPN access?')
     print('\n  The edit waits for a reviewer. Until then the signed earlier version keeps serving, so the model never reads it.')
 
