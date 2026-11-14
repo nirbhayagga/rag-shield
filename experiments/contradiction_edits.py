@@ -1,6 +1,6 @@
 """Experiment 9: does the contradiction check hold planted false statements without holding ordinary edits?
 
-A planted false statement carries no instruction ("The primary owner of VAN-WKS-4471 is <someone else>"), so the
+A planted false statement carries no instruction ("gateway GW-07 listens on port 8443", on a page that says 443), so the
 injection classifier passes it, and an on-topic one isn't off-topic either. The contradiction check compares each added
 passage with the most similar sentences of the page's previous version using an NLI model, and flags the edit when the
 model says they contradict (Shield(contradiction=ContradictionDetector())).

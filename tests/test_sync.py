@@ -70,6 +70,16 @@ class HeldEditTests(unittest.TestCase):
     def test_its_preview_is_what_the_edit_adds(self):
         self.assertEqual(snapshot(self.shield, previews=True)['items'][0]['preview'], '[flagged] ' + ATTACK)
 
+    def test_a_long_reason_and_editor_are_cut_to_what_the_dashboard_accepts(self):
+        shield = make_shield(StubInjection())
+        shield.policy.delta_offtopic = 2.0
+        page = 'Download the client from https://vpn.example.com/setup and sign in.'
+        shield.ingest('vpn', page, 'wiki', 'high')
+        shield.ingest('vpn', page.replace('vpn.example.com/setup', 'other.example.net/' + 'a' * 1500), 'wiki', 'high', editor='e' * 300)
+        sent = snapshot(shield)
+        self.assertEqual((len(sent['items'][0]['reason']), len(sent['items'][0]['editor'])), (1000, 200))
+        self.assertLessEqual(max(len(e['reason']) for e in sent['events']), 1000)
+
     def test_a_decision_about_other_text_is_refused_as_stale(self):
         result = apply(self.shield, {'id': 7, 'kind': 'approve', 'doc_id': 'vpn', 'chunk_id': 'vpn', 'text_sha256': sha256('other'), 'reviewer': 'r'})
         self.assertEqual(result['status'], 'stale')

@@ -12,6 +12,11 @@ from .shield import UNSCORED
 LOW_TRUST_ONLY = 'low-trust source'
 ROUTINE = {LOW_TRUST_ONLY, UNSCORED}  # true of a whole source or setup, so not worth a reviewer's time chunk by chunk
 PREVIEW_CHARS = 2000
+REASON_CHARS, EDITOR_CHARS = 1000, 200  # the dashboard refuses a whole sync if one field is longer
+
+
+def _short(text, limit):
+    return text if text is None or len(text) <= limit else text[:limit - 3] + '...'
 
 
 def snapshot(shield, previews=False):
@@ -46,7 +51,9 @@ def snapshot(shield, previews=False):
         if previews:  # what the edit adds, which is what the reviewer has to judge (the reason says why it was flagged)
             item['preview'] = '\n\n'.join(('[flagged] ' if a['flag'] else '') + a['text'] for a in added)[:PREVIEW_CHARS]
         items.append(item)
-    return {'items': items, 'events': [{'at': at, 'chunk_id': chunk_id, 'action': action, 'reason': reason}
+    for item in items:  # a reason can quote a page sentence or a long link
+        item['reason'], item['editor'] = _short(item['reason'], REASON_CHARS), _short(item['editor'], EDITOR_CHARS)
+    return {'items': items, 'events': [{'at': at, 'chunk_id': chunk_id, 'action': action, 'reason': _short(reason, REASON_CHARS)}
                                        for at, chunk_id, action, reason in shield.events]}
 
 
