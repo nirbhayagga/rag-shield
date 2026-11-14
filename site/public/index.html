@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RAG Shield · Provenance and poisoning detection for RAG</title>
-<meta name="description" content="RAG Shield signs every chunk in your vector database, isolates what each edit to a trusted page adds, and checks every retrieved chunk before your model sees it.">
+<title>RAG Shield · Change control for the documents your AI reads</title>
+<meta name="description" content="RAG Shield scores what each edit to your AI&#8217;s documents adds, holds risky edits for review while the previous version keeps serving, and signs every chunk with its version and editor.">
 <link rel="canonical" href="https://ragshield.dev/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://ragshield.dev/">
 <meta property="og:site_name" content="RAG Shield">
-<meta property="og:title" content="RAG Shield: provenance and poisoning detection for RAG">
-<meta property="og:description" content="Know where every retrieved chunk came from, and whether to trust it.">
+<meta property="og:title" content="RAG Shield: change control for the documents your AI reads">
+<meta property="og:description" content="Score every edit to your AI&#8217;s documents, and hold the risky ones for review.">
 <meta property="og:image" content="https://ragshield.dev/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -43,13 +43,14 @@
 <main id="main">
 <section class="wrap hero">
   <div class="hero-head">
-    <p class="kicker">Provenance and poisoning detection for retrieval-augmented AI</p>
-    <h1>Know where every retrieved chunk came from, and whether to trust it.</h1>
+    <p class="kicker">Change control for the documents your AI reads</p>
+    <h1>Score every edit to your AI&#8217;s documents, and hold the risky ones for review.</h1>
   </div>
   <div class="hero-copy">
     <p class="lede">Your assistant trusts whatever sits in its index, and anyone who can edit a wiki page or ticket can put text there.
-      RAG Shield signs every chunk at ingestion, isolates what each edit to a trusted page adds, and checks every chunk at
-      retrieval, before your model sees it.</p>
+      RAG Shield compares each edit with the last approved version and scores only what it adds. A risky edit waits for
+      review while the previous version keeps serving, and every chunk is signed with its version and editor, so each answer
+      traces back to who changed what.</p>
     <div class="cta">
       <a class="btn" href="#partner">Become a design partner</a>
       <button class="code-btn" type="button" data-copy="pip install rag-shield" aria-label="Copy install command">
