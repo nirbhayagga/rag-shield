@@ -234,7 +234,7 @@ class Shield:
         if self.contradiction is not None:
             for a, (c, premise) in zip(out, self._contradictions([seen for seen, _ in inspected], previous)):
                 a['contradiction'] = round(float(c), 4)
-                if c >= p.delta_contradiction:
+                if c >= p.delta_contradiction and premise is not None:  # None: no sentence of the page was compared
                     a['contradicts'] = premise
                     quoted = premise if len(premise) <= 160 else premise[:157] + '...'
                     a['reasons'].append(('contradiction', f'contradicts what the page already says (score {c:.2f}): "{quoted}"'))
