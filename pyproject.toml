@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rag-shield"
 dynamic = ["version"]
-description = "Signed provenance, poisoning detection and a retrieval-time trust filter for RAG pipelines"
+description = "Change control for the documents a RAG pipeline reads: edit scoring, held edits, signed provenance and a retrieval-time trust filter"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"

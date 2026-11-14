@@ -12,6 +12,13 @@ First public release.
 - **Held edits.** A flagged edit is held for review while the previous version keeps serving (`Policy.hold_edits`, on by
   default). `Shield.approve`, `reject` and `quarantine` take the SHA-256 of the text the reviewer read, so a decision never
   covers text nobody saw.
+- **Editor and version.** `ingest(..., editor=...)` signs who made a version, and the version number, into every chunk
+  record. Retrieved hits carry `version`, `editor` and `key_id`, and `Ledger.versions(doc_id)` lists each version's
+  editor. Records without them still verify.
+- **Fact changes.** An edit that swaps a link for one to another site, or replaces an email address, phone number, IP
+  address or amount the page already had, is held (`Policy.fact_changes`, on by default).
+- **Plain-language reasons.** Each held edit says what it does ("adds instructions aimed at the AI assistant", "points a
+  link to a site the page didn't link to before", ...) and who made it, so a reviewer doesn't need to read scores.
 - **Trust filter.** Three trust tiers re-rank results by similarity × trust. Low and medium-trust chunks with a high
   injection score or hidden characters, and low-trust outliers, are dropped. Trusted chunks are never dropped on a score
   alone. Chunks with no injection score carry an `unscored` label (`Policy.unscored = 'drop'` fails closed instead). A
