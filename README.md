@@ -138,8 +138,9 @@ without the check and 23% with it (12% with v5 as the classifier). See the Poiso
 
 ### Try it
 
-`python examples/demo.py` runs a small company wiki through three attacks: an instruction planted in a trusted
-page (held for review), a low-trust upload carrying an injection, and a chunk changed directly in the vector store. It
+`python examples/demo.py` runs a small company wiki through four attacks: an instruction planted in a trusted
+page (held for review), an edit that only points a link at a look-alike site (held by the fact check), a low-trust
+upload carrying an injection, and a chunk changed directly in the vector store. It
 prints what the vector database returned and what the shield did with each result.
 
 ### Use your own vector database
