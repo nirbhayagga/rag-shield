@@ -505,7 +505,7 @@ show:
 
 Apache License 2.0 (see `LICENSE`). Copyright 2026 Nirbhay Aggarwal.
 
-Third-party data in `data/external/` and the fonts in `site/public/fonts/` keep their own licenses, listed in `NOTICE`.
+Third-party data in `data/external/` keeps its own licenses, listed in `NOTICE`.
 Public corpora fetched by `experiments/fetch_corpus.py` are not redistributed.
 
 Issues are welcome; pull requests aren't accepted yet (see `CONTRIBUTING.md`). Security reports: see `SECURITY.md`.
