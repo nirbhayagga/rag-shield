@@ -17,7 +17,7 @@ try:
     import eval_harness as H  # noqa: E402  (private, not distributed: see the README)
 except ImportError:
     H = None
-from ragshield.detectors import CONTRADICTION_MODEL, INJECTION_MODEL, CombinedInjection, OutlierDetector  # noqa: E402
+from ragshield.detectors import CONTRADICTION_MODEL, OFF_THE_SHELF_MODEL, CombinedInjection, OutlierDetector  # noqa: E402
 from ragshield.index import DEFAULT_MODEL, VectorIndex  # noqa: E402
 from ragshield.provenance import Ledger, Signer, sha256  # noqa: E402
 from ragshield.shield import Policy, Shield  # noqa: E402
@@ -69,7 +69,7 @@ def load_public(name, max_chunks=400, seed=29):
 
 
 def add_eval_args(parser):
-    parser.add_argument('--injection-model', default=INJECTION_MODEL, help="Hugging Face id or local path (e.g. models/ragshield-injection-v1); join several with '+' to flag if any fires ('base' is the default model)")
+    parser.add_argument('--injection-model', default=OFF_THE_SHELF_MODEL, help="Hugging Face id or local path (e.g. models/ragshield-injection-v1); join several with '+' to flag if any fires ('base' is the off-the-shelf model)")
     parser.add_argument('--split', choices=['all', 'test'], default='all',
                         help='test: attack hosts, edited pages and clean-rate chunks come only from the held-out documents in data/splits.json')
 
@@ -106,12 +106,12 @@ def attack_stem(stem, args):
 def model_tag(model):
     if '+' in model:
         return '+'.join(model_tag(m) for m in model.split('+'))
-    return Path(model).name if Path(model).is_dir() else 'base'
+    return 'base' if model in ('base', OFF_THE_SHELF_MODEL) else Path(model).name  # a local folder and its Hub id share a tag
 
 
 def out_path(stem, args):
     """results/<stem>.json for the original setup, results/<stem>-<model>-<split>.json otherwise."""
-    if args.injection_model == INJECTION_MODEL and args.split == 'all':
+    if args.injection_model == OFF_THE_SHELF_MODEL and args.split == 'all':
         return HERE / f'results/{stem}.json'
     return HERE / f'results/{stem}-{model_tag(args.injection_model)}-{args.split}.json'
 
@@ -148,11 +148,11 @@ class CachedEmbedder:
 class CachedInjection:
     """One classifier, or several joined with '+' (e.g. base+../models/my-model): then a chunk is flagged if any of them fires."""
 
-    def __init__(self, model=INJECTION_MODEL, device=None):
+    def __init__(self, model=OFF_THE_SHELF_MODEL, device=None):
         self.name, self.device, self._model = model, device, None
         self.combined = None
         if '+' in model:
-            self.combined = CombinedInjection([CachedInjection(INJECTION_MODEL if m == 'base' else m, device) for m in model.split('+')])
+            self.combined = CombinedInjection([CachedInjection(OFF_THE_SHELF_MODEL if m == 'base' else m, device) for m in model.split('+')])
             return
         key = model.replace('/', '_')
         if Path(model).is_dir():  # a local fine-tune: key the cache by its weights, so retraining invalidates it

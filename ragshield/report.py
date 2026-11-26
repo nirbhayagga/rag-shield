@@ -5,7 +5,7 @@ text-like file as a trusted source, fits the outlier model on the result, and re
 warning, sent to review, or (for low-trust sources) dropped. Scores are the same ones the SDK uses at ingestion.
 
 Usage: python -m ragshield.report <folder or files> [--out report.md] [--json report.json] [--device cuda]
-       [--injection-model protectai/deberta-v3-base-prompt-injection-v2] [--top 10]"""
+       [--injection-model MODEL_ID] [--top 10]"""
 import argparse
 import json
 import sys

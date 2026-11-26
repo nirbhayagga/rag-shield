@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-25)
 
 First public release.
 
@@ -23,6 +23,9 @@ First public release.
   injection score or hidden characters, and low-trust outliers, are dropped. Trusted chunks are never dropped on a score
   alone. Chunks with no injection score carry an `unscored` label (`Policy.unscored = 'drop'` fails closed instead). A
   `lockdown` switch serves only verified chunks with no warnings.
+- **Fine-tuned classifier.** The default injection classifier is `nirbhayagga/ragshield-injection-v5` on Hugging Face
+  (Apache-2.0), fine-tuned from ProtectAI's DeBERTa-v3 on public data only. It flags 94 to 96% of attack edits on public
+  docs it never saw (46% off-the-shelf) and holds 3 to 7% of real edits (7 to 21% off-the-shelf).
 - **Detectors.** An injection classifier, an embedding outlier model and a hidden-character check (zero-width, look-alike,
   fullwidth and tag characters). The classifier scores the cleaned text.
 - **Contradiction check (optional).** `Shield(contradiction=ContradictionDetector())` holds an edit when an added

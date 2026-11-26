@@ -1,7 +1,8 @@
 """Content detectors run at ingestion. They score; the policy in shield.py decides what happens."""
 import numpy as np
 
-INJECTION_MODEL = 'protectai/deberta-v3-base-prompt-injection-v2'  # Apache-2.0; Llama Prompt Guard 2 is an optional gated alternative
+INJECTION_MODEL = 'nirbhayagga/ragshield-injection-v5'  # Apache-2.0; fine-tuned on public data only (see its model card)
+OFF_THE_SHELF_MODEL = 'protectai/deberta-v3-base-prompt-injection-v2'  # Apache-2.0; v5's base, and the experiments' baseline
 CONTRADICTION_MODEL = 'cross-encoder/nli-deberta-v3-base'  # Apache-2.0
 
 

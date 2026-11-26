@@ -26,13 +26,13 @@ import numpy as np
 
 from common import HERE, CachedContradiction, CachedEmbedder, CachedInjection, load_public, make_shield, vandelay
 from ragshield import delta
-from ragshield.detectors import CONTRADICTION_MODEL, INJECTION_MODEL
+from ragshield.detectors import CONTRADICTION_MODEL, OFF_THE_SHELF_MODEL
 from ragshield.shield import Policy
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument('--corpus', nargs='*', default=[], help='public corpora for benign edits (default: the private corpus)')
 parser.add_argument('--model', default=CONTRADICTION_MODEL)
-parser.add_argument('--injection-model', default=INJECTION_MODEL)
+parser.add_argument('--injection-model', default=OFF_THE_SHELF_MODEL)
 parser.add_argument('--device', default=None)
 parser.add_argument('--benign', type=int, default=130, help='benign edits per corpus')
 parser.add_argument('--max-chunks', type=int, default=400, help='public corpora: sample of whole pages, as in experiment 6')

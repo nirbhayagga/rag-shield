@@ -45,11 +45,11 @@ import numpy as np
 
 from common import HERE, PUBLIC_CORPORA, load_public, vandelay
 from ragshield import chunking, delta
-from ragshield.detectors import INJECTION_MODEL
+from ragshield.detectors import OFF_THE_SHELF_MODEL
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument('--device', default=None, help='cuda, cuda:0, cpu (default: cuda if available)')
-parser.add_argument('--base', default=INJECTION_MODEL)
+parser.add_argument('--base', default=OFF_THE_SHELF_MODEL)
 parser.add_argument('--name', default='ragshield-injection-v1')
 parser.add_argument('--epochs', type=int, default=3)
 parser.add_argument('--lr', type=float, default=2e-5)

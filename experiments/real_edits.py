@@ -27,7 +27,7 @@ import numpy as np
 from common import CACHE, HERE, CachedEmbedder, CachedInjection, make_shield
 from fetch_corpus import strip_hugo, strip_learn
 from ragshield import delta, facts
-from ragshield.detectors import INJECTION_MODEL
+from ragshield.detectors import OFF_THE_SHELF_MODEL
 from ragshield.shield import Policy
 
 # The history is read back from these commits (each repository's default branch on the day of the first run), so the
@@ -46,7 +46,7 @@ parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.R
 parser.add_argument('--repo', nargs='+', default=list(REPOS), choices=list(REPOS))
 parser.add_argument('--edits', type=int, default=150, help='edits per repository (one changed page per commit)')
 parser.add_argument('--since', default='2025-11-01', help='commits after this date')
-parser.add_argument('--injection-model', default=INJECTION_MODEL)
+parser.add_argument('--injection-model', default=OFF_THE_SHELF_MODEL)
 parser.add_argument('--device', default=None)
 parser.add_argument('--seed', type=int, default=43)
 parser.add_argument('--facts-only', action='store_true', help='run only the fact check (no models); same edits and plants')

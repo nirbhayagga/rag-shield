@@ -21,7 +21,7 @@ import numpy as np
 
 from common import HERE, PUBLIC_CORPORA, CachedEmbedder, CachedInjection, load_public, make_shield, model_tag
 from ragshield import chunking, delta, hidden
-from ragshield.detectors import INJECTION_MODEL
+from ragshield.detectors import OFF_THE_SHELF_MODEL
 from ragshield.shield import Policy
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -30,7 +30,7 @@ parser.add_argument('--max-chunks', type=int, default=400)
 parser.add_argument('--seed', type=int, default=29)
 parser.add_argument('--device', default=None)
 parser.add_argument('--target-fpr', type=float, default=0.05)
-parser.add_argument('--injection-model', default=INJECTION_MODEL)
+parser.add_argument('--injection-model', default=OFF_THE_SHELF_MODEL)
 parser.add_argument('--limit', type=int, default=None, help='use only the first N attacks (smoke test)')
 args = parser.parse_args()
 

@@ -18,7 +18,7 @@ trusted content is served with a warning. Everything runs locally: no text leave
 | Delta scoring | `ragshield/delta.py`, `shield.py` | On re-ingestion, isolates new paragraphs (or new sentences in modified paragraphs) and scores only those. A flagged edit is held until someone approves or rejects it |
 | Fact changes | `ragshield/facts.py` | Holds an edit that swaps a link the page already had for one to another site, or replaces an email address, phone number, IP address or amount |
 | Hidden characters | `ragshield/hidden.py` | Finds invisible, tag, direction-control and look-alike characters; the classifier scores the cleaned text and the finding is its own reason. Ordinary multilingual text and emoji are left alone |
-| Detectors | `ragshield/detectors.py`, `shield.py` | Injection classifier (ProtectAI DeBERTa-v3 by default), an embedding-outlier model (LOF over bge-base), a retrieval-frequency probe, and an optional contradiction check for edits (an NLI model) |
+| Detectors | `ragshield/detectors.py`, `shield.py` | Injection classifier (our fine-tuned DeBERTa-v3 by default, trained on public data only), an embedding-outlier model (LOF over bge-base), a retrieval-frequency probe, and an optional contradiction check for edits (an NLI model) |
 | Trust filter | `ragshield/shield.py` | Verifies each retrieved chunk, drops tampered/unknown/quarantined chunks, warns and queues suspicious trusted content, re-ranks by similarity × trust; `lockdown` kill switch |
 | Index | `ragshield/index.py`, `ragshield/adapters.py` | Built-in cosine index, or adapters for ChromaDB and pgvector |
 | Retrievers | `ragshield/integrations/` | Drop-in LangChain and LlamaIndex retrievers |
@@ -45,11 +45,13 @@ Python 3.10 or newer. On a machine without a GPU, install the CPU build of PyTor
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu    # skip on a GPU machine
-pip install git+https://github.com/nirbhayagga/rag-shield.git
+pip install rag-shield
 ```
 
 The first run downloads two models from Hugging Face, about 1 GB in total: `BAAI/bge-base-en-v1.5` and
-`protectai/deberta-v3-base-prompt-injection-v2`.
+[`nirbhayagga/ragshield-injection-v5`](https://huggingface.co/nirbhayagga/ragshield-injection-v5), RAG Shield's injection classifier. It is fine-tuned from
+`protectai/deberta-v3-base-prompt-injection-v2` on public data only (Apache-2.0; the model card lists the data). To use
+the off-the-shelf model instead, pass `InjectionDetector('protectai/deberta-v3-base-prompt-injection-v2')` as `injection`.
 
 ## Use
 
@@ -192,8 +194,8 @@ classifier and the outlier model. It writes a Markdown report covering:
 - the top chunks to look at
 - what share of the index raises no flag
 
-It is read-only and local. On a 36-file internal corpus (261 chunks) it took about 6 minutes on CPU and flagged 7% of
-chunks. Most of those were security logs and incident reports, which generic classifiers misread; that is exactly what
+It is read-only and local. On a 36-file internal corpus (261 chunks), with the off-the-shelf classifier, it took about 6 minutes on CPU and
+flagged 7% of chunks. Most of those were security logs and incident reports, which generic classifiers misread; that is exactly what
 the review queue is for.
 
 ## Development
@@ -281,8 +283,9 @@ held-out test.
   number..."). v5 also doubles the Kubernetes and ATT&CK passages (`--public-units 2400`). It flags every edit that adds
   the note (80% of low-trust copies that carry it), and its false alarms are back at v3's level (the table). The note
   set has only 4 notes and was used to choose v4 and v5, so it isn't a blind test.
-- **Default.** The SDK uses the off-the-shelf classifier by default. v5's weights will be published with the 0.1.0
-  release and become the default.
+- **Default.** v5 is the SDK's default classifier as of 0.1.0, published as [`nirbhayagga/ragshield-injection-v5`](https://huggingface.co/nirbhayagga/ragshield-injection-v5).
+  The experiment scripts still default to the off-the-shelf model, so the tables above reproduce; pass
+  `--injection-model` to run them with v5.
 
 **Real edits** (experiment 10). The benign edits above are synthetic: a paragraph from another page pasted in.
 `real_edits.py` replays real ones. For each docs repository it takes commits from the past year that changed a page, one
